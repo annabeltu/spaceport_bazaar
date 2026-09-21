@@ -79,33 +79,10 @@ def test_live_marker_is_registered(pytestconfig):
 # --- models.py ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("cls", [Amounts, GuardContext, ClientState])
-def test_model_is_a_frozen_dataclass(cls):
-    assert is_frozen_dataclass(cls)
-
-
 def test_changing_a_frozen_model_raises():
     amounts = Amounts(water=1, food=2, components=3)
     with pytest.raises(dataclasses.FrozenInstanceError):
         amounts.water = 99
-
-
-def test_model_fields_match_the_contract():
-    assert field_types(Amounts) == (("water", int), ("food", int), ("components", int))
-    assert field_types(GuardContext) == (
-        ("run_id", str),
-        ("is_ready", bool),
-        ("max_command_bytes", int),
-        ("inventory", Amounts),
-        ("sent_requests", Mapping[str, bytes]),
-    )
-    assert field_types(ClientState) == (
-        ("run_id", str | None),
-        ("snapshot", pb.State | None),
-        ("is_ready", bool),
-        ("results", Mapping[str, pb.Result]),
-        ("sent_requests", Mapping[str, bytes]),
-    )
 
 
 @pytest.mark.parametrize(
@@ -338,9 +315,20 @@ def test_function_explains_itself(expected):
     assert expected.function.__doc__
 
 
-# --- Data types outside models.py -----------------------------------------------
+# --- Every data type: frozen, with the contract's fields -------------------------
 
 DATA_TYPES = (
+    (Amounts, (("water", int), ("food", int), ("components", int))),
+    (
+        GuardContext,
+        (("run_id", str), ("is_ready", bool), ("max_command_bytes", int),
+         ("inventory", Amounts), ("sent_requests", Mapping[str, bytes])),
+    ),
+    (
+        ClientState,
+        (("run_id", str | None), ("snapshot", pb.State | None), ("is_ready", bool),
+         ("results", Mapping[str, pb.Result]), ("sent_requests", Mapping[str, bytes])),
+    ),
     (Credentials, (("station_id", str), ("run_id", str), ("token", str))),
     (
         RunOptions,
