@@ -274,3 +274,92 @@ async def test_protocol_or_run_mismatch_sends_error_then_closes(
             assert reply.protocol_error.close_session is True
             with pytest.raises(ConnectionClosed):
                 await websocket.recv()
+
+
+def test_sync_is_allowed_before_readiness_and_only_advances_sequence():
+    scenario = Scenario.create(run_id="fake-run-1")
+    sync = load_spec_message(
+        "10_sync.textproto", placeholder_values={"RUN_ID": scenario.run_id}
+    )
+
+    updated, replies = scenario.handle(sync)
+
+    assert updated.ready is False
+    assert updated.world_version == 2
+    assert updated.snapshot_sequence == 2
+    assert replies[0].state.world_version == 2
+    assert replies[0].state.snapshot_sequence == 2
+
+
+def test_exact_retry_returns_stored_result_and_new_state_without_repeating_action():
+    scenario = Scenario.create(run_id="fake-run-1")
+    ready = load_spec_message(
+        "01_ready.textproto", placeholder_values={"RUN_ID": scenario.run_id}
+    )
+    scenario, _ = scenario.handle(ready)
+    advertise = load_spec_message(
+        "02_advertise_water_for_food.textproto",
+        placeholder_values={"RUN_ID": scenario.run_id},
+    )
+    scenario, first_replies = scenario.handle(advertise)
+
+    retried, retry_replies = scenario.handle(advertise)
+
+    assert retried.world_version == 3
+    assert retried.snapshot_sequence == 3
+    assert retried.next_step == 3
+    assert retry_replies[0] == first_replies[0]
+    assert retry_replies[1].state.world_version == 3
+
+
+def test_changed_command_with_reused_id_returns_request_id_conflict():
+    scenario = Scenario.create(run_id="fake-run-1")
+    ready = load_spec_message(
+        "01_ready.textproto", placeholder_values={"RUN_ID": scenario.run_id}
+    )
+    scenario, _ = scenario.handle(ready)
+    advertise = load_spec_message(
+        "02_advertise_water_for_food.textproto",
+        placeholder_values={"RUN_ID": scenario.run_id},
+    )
+    scenario, _ = scenario.handle(advertise)
+    changed = pb.ClientMessage()
+    changed.CopyFrom(advertise)
+    changed.advertise.body.expires_tick = 5
+
+    updated, replies = scenario.handle(changed)
+
+    assert updated.world_version == 3
+    assert updated.next_step == 3
+    assert replies[0].result.ok is False
+    assert replies[0].result.code == pb.RESULT_CODE_REQUEST_ID_CONFLICT
+    assert replies[1].state.world_version == 3
+
+
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "03_advertise_seeking_components.textproto",
+        "04_offer_water_for_food.textproto",
+        "07_accept_gift.textproto",
+        "08_withdraw_advertisement.textproto",
+        "09_advertise_over_request_limit.textproto",
+    ),
+)
+def test_new_out_of_order_command_ends_scenario(filename):
+    scenario = Scenario.create(run_id="fake-run-1")
+    ready = load_spec_message(
+        "01_ready.textproto", placeholder_values={"RUN_ID": scenario.run_id}
+    )
+    scenario, _ = scenario.handle(ready)
+    command = load_spec_message(
+        filename,
+        placeholder_values={
+            "RUN_ID": scenario.run_id,
+            "ADVERTISEMENT_ID": "not-yet-created",
+            "ZERO_PRICE_OFFER_ID": "not-yet-created",
+        },
+    )
+
+    with pytest.raises(ValueError, match="scenario mismatch"):
+        scenario.handle(command)
