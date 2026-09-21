@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Connect to the practice server and complete its readiness handshake."""
+"""Connect to the practice server and complete practice steps 1 through 4."""
 
 from __future__ import annotations
 
@@ -8,13 +8,18 @@ import json
 from pathlib import Path
 import sys
 
-from google.protobuf import text_format
 from websockets.asyncio.client import connect
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from generated import bazaar_pb2  # noqa: E402
+from generated import bazaar_pb2 as pb  # noqa: E402
+from client.connection import receive, send  # noqa: E402
+from client.messages import build_ready, build_advertisement, build_offer  # noqa: E402
+from client.state import (  # noqa: E402
+    require, validate_initial, validate_progress, validate_advertisement,
+    validate_result, validate_offer,
+)
 
 
 CREDENTIALS = ROOT / "starter" / "validation-credentials.json"
@@ -39,14 +44,6 @@ def p01_token() -> str:
     return player["token"]
 
 
-def decode(payload: bytes) -> bazaar_pb2.ServerMessage:
-    if not isinstance(payload, bytes):
-        raise RuntimeError("Server sent text; binary Protobuf was expected.")
-    message = bazaar_pb2.ServerMessage()
-    message.ParseFromString(payload)
-    return message
-
-
 async def main() -> None:
     async with connect(
         URI,
@@ -58,80 +55,53 @@ async def main() -> None:
                 f"Server selected {websocket.subprotocol!r}, expected {SUBPROTOCOL!r}."
             )
 
-        first = decode(await websocket.recv())
-        if first.WhichOneof("message") != "state":
-            raise RuntimeError(f"Expected initial state, got {first.WhichOneof('message')}")
+        state = (await receive(websocket, "state")).state
+        validate_initial(state)
+        run_id = state.run_id
+        await send(websocket, build_ready(run_id, state.snapshot_sequence))
+        readiness = (await receive(websocket, "readiness")).readiness
+        require(readiness.ready and readiness.run_id == run_id
+                and readiness.snapshot_sequence == state.snapshot_sequence,
+                "Readiness confirmation does not match the initial state.")
+        print("Readiness confirmed.", flush=True)
 
-        state = first.state
-        print(
-            f"Connected as {state.self_station_id}: run={state.run_id}, "
-            f"snapshot={state.snapshot_sequence}, world={state.world_version}",
-            flush=True,
-        )
-        print(text_format.MessageToString(first, as_utf8=True))
+        async def execute(message, version):
+            nonlocal state
+            command = getattr(message, message.WhichOneof("message"))
+            sequence = state.snapshot_sequence + 1
+            await send(websocket, message)
+            result = (await receive(websocket, "result")).result
+            object_id = validate_result(result, run_id, command.request_id)
+            update = (await receive(websocket, "state")).state
+            require(update.run_id == run_id and update.self_station_id == "P01",
+                    "State belongs to another run or station.")
+            validate_progress(update, version, sequence)
+            state = update
+            return object_id
 
-        ready = bazaar_pb2.ClientMessage()
-        ready.ready.type = bazaar_pb2.READY_TYPE_READY
-        ready.ready.protocol_version = "2.0"
-        ready.ready.run_id = state.run_id
-        ready.ready.ready = True
-        ready.ready.snapshot_sequence = state.snapshot_sequence
-        await websocket.send(ready.SerializeToString())
+        # A reconnect supplies current progress; do not replay obsolete checks.
+        if state.world_version == 2:
+            object_id = await execute(build_advertisement(
+                run_id, "student-advertise-1", [pb.RESOURCE_WATER], [pb.RESOURCE_FOOD]), 3)
+            validate_advertisement(state, [pb.RESOURCE_WATER], [pb.RESOURCE_FOOD], object_id)
+            print("Step 2 confirmed: advertised water for food; inventory unchanged.", flush=True)
+        if state.world_version == 3:
+            validate_advertisement(state, [pb.RESOURCE_WATER], [pb.RESOURCE_FOOD])
+            object_id = await execute(build_advertisement(
+                run_id, "student-advertise-seeking-1", [], [pb.RESOURCE_COMPONENTS]), 4)
+            validate_advertisement(state, [], [pb.RESOURCE_COMPONENTS], object_id)
+        advertisement_id = validate_advertisement(state, [], [pb.RESOURCE_COMPONENTS])
+        print(f"Step 3 confirmed: seeking components; ADVERTISEMENT_ID={advertisement_id}", flush=True)
 
-        response = decode(await websocket.recv())
-        if response.WhichOneof("message") != "readiness" or not response.readiness.ready:
-            raise RuntimeError(f"Readiness was not confirmed:\n{response}")
-        print(
-            "Readiness confirmed. The connection is ready for trading commands.",
-            flush=True,
-        )
+        offer_id = await execute(build_offer(run_id), 5)
+        validate_offer(state, offer_id)
+        print(f"Step 4 confirmed: offered two water for one food; OFFER_ID={offer_id}", flush=True)
 
-        advertisement = bazaar_pb2.ClientMessage()
-        command = advertisement.advertise
-        command.type = bazaar_pb2.ADVERTISE_TYPE_ADVERTISE
-        command.protocol_version = "2.0"
-        command.run_id = state.run_id
-        command.request_id = "student-advertise-1"
-        command.body.selling.items.append(bazaar_pb2.RESOURCE_WATER)
-        command.body.seeking.items.append(bazaar_pb2.RESOURCE_FOOD)
-        command.body.expires_tick = 6
-        await websocket.send(advertisement.SerializeToString())
-
-        result = decode(await websocket.recv())
-        print(text_format.MessageToString(result, as_utf8=True))
-        if (
-            result.WhichOneof("message") != "result"
-            or result.result.request_id != command.request_id
-            or not result.result.ok
-            or result.result.code != bazaar_pb2.RESULT_CODE_OK
-        ):
-            raise RuntimeError(f"Advertisement was not confirmed: {result}")
-
-        update = decode(await websocket.recv())
-        print(text_format.MessageToString(update, as_utf8=True))
-        if update.WhichOneof("message") != "state":
-            raise RuntimeError(f"Expected advertisement state: {update}")
-        state = update.state
-        inventory = getattr(state, "self").inventory
-        if (inventory.water, inventory.food, inventory.components) != (30, 30, 30):
-            raise RuntimeError("Step 2 inventory should still be (30, 30, 30).")
-        if not any(
-            item.station_id == state.self_station_id
-            and list(item.selling.items) == [bazaar_pb2.RESOURCE_WATER]
-            and list(item.seeking.items) == [bazaar_pb2.RESOURCE_FOOD]
-            and item.expires_tick == 6
-            and item.status == bazaar_pb2.PUBLICATION_STATUS_ACTIVE
-            for item in state.advertisements.items
-        ):
-            raise RuntimeError("The active water-for-food advertisement is missing.")
-        if state.world_version != 3 or state.snapshot_sequence != 2:
-            raise RuntimeError("Step 2 expected world version 3 and snapshot sequence 2.")
-        print("Step 2 confirmed: advertised water for food; inventory unchanged.", flush=True)
-
-        # Keep receiving because state updates are server-pushed. Add subsequent
-        # commands before this loop as you implement the remaining README steps.
-        async for payload in websocket:
-            print(text_format.MessageToString(decode(payload), as_utf8=True))
+        # P02's acceptance and gift arrive automatically (steps 5 and 6).
+        while True:
+            message = await receive(websocket)
+            if message.WhichOneof("message") == "state":
+                state = message.state
 
 
 if __name__ == "__main__":
