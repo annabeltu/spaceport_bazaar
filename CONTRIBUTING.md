@@ -58,6 +58,19 @@ history keeps it even after deletion.
 root, and Python packages are pinned to exact versions in
 `requirements.txt` -- upgrade on purpose, then rerun the tests.
 
+## Running the tests
+
+Inside the container:
+
+```bash
+pytest                                        # Python tests, about a second
+bash tests/hooks/test_pre_commit.sh           # the secret-blocking hook
+bash tests/scripts/test_verify_checksums.sh   # the fingerprint checks
+```
+
+The two shell test scripts also run on macOS. They only ever damage
+throwaway copies in a temp directory, never your real files.
+
 ## Branches
 
 - Name branches `<your-name>-<short-description>`, e.g.
