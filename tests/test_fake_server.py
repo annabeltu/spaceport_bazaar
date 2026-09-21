@@ -2,6 +2,7 @@
 
 import pytest
 from websockets.asyncio.client import connect
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from generated import bazaar_pb2 as pb
 
@@ -172,3 +173,104 @@ async def test_real_socket_plays_the_complete_exchange():
     assert received[-1].state.self.inventory.food == 31
     assert received[-1].state.self.inventory.components == 31
     assert all(message.IsInitialized() for message in server.sent)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "subprotocols", "status_code"),
+    (
+        ({"Authorization": "Bearer wrong"}, ["bazaar.protobuf.v2"], 401),
+        ({}, ["bazaar.protobuf.v2"], 401),
+        ("p02", ["bazaar.protobuf.v2"], 400),
+        ("valid", None, 400),
+        ("valid", ["wrong.protocol"], 400),
+    ),
+)
+async def test_handshake_rejects_bad_auth_station_or_subprotocol(
+    headers, subprotocols, status_code
+):
+    async with FakeServer() as server:
+        if headers == "p02":
+            headers = {"Authorization": f"Bearer {server.p02_token}"}
+        elif headers == "valid":
+            headers = {"Authorization": f"Bearer {server.token}"}
+
+        with pytest.raises(InvalidStatus) as caught:
+            async with connect(
+                server.url,
+                additional_headers=headers,
+                subprotocols=subprotocols,
+            ):
+                pass
+
+    assert caught.value.response.status_code == status_code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frame", (b"not protobuf", b"", "text frame"))
+async def test_bad_frames_receive_a_nonclosing_bad_message(frame):
+    async with FakeServer() as server:
+        async with connect(
+            server.url,
+            additional_headers={"Authorization": f"Bearer {server.token}"},
+            subprotocols=["bazaar.protobuf.v2"],
+        ) as websocket:
+            await websocket.recv()
+            await websocket.send(frame)
+            reply = pb.ServerMessage.FromString(await websocket.recv())
+
+            assert reply.protocol_error.code == pb.CONTROL_CODE_BAD_MESSAGE
+            assert reply.protocol_error.close_session is False
+            assert websocket.state.name == "OPEN"
+
+
+@pytest.mark.asyncio
+async def test_trading_before_readiness_is_rejected_but_connection_stays_open():
+    async with FakeServer() as server:
+        async with connect(
+            server.url,
+            additional_headers={"Authorization": f"Bearer {server.token}"},
+            subprotocols=["bazaar.protobuf.v2"],
+        ) as websocket:
+            await websocket.recv()
+            command = load_spec_message(
+                "02_advertise_water_for_food.textproto",
+                placeholder_values={"RUN_ID": server.run_id},
+            )
+            await websocket.send(command.SerializeToString())
+            reply = pb.ServerMessage.FromString(await websocket.recv())
+
+            assert reply.protocol_error.code == pb.CONTROL_CODE_BAD_MESSAGE
+            assert reply.protocol_error.close_session is False
+            assert websocket.state.name == "OPEN"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value", "expected_code"),
+    (
+        ("protocol_version", "1.0", pb.CONTROL_CODE_UNSUPPORTED_VERSION),
+        ("run_id", "different-run", pb.CONTROL_CODE_RUN_MISMATCH),
+    ),
+)
+async def test_protocol_or_run_mismatch_sends_error_then_closes(
+    field, value, expected_code
+):
+    async with FakeServer() as server:
+        async with connect(
+            server.url,
+            additional_headers={"Authorization": f"Bearer {server.token}"},
+            subprotocols=["bazaar.protobuf.v2"],
+        ) as websocket:
+            await websocket.recv()
+            command = load_spec_message(
+                "01_ready.textproto", placeholder_values={"RUN_ID": server.run_id}
+            )
+            setattr(command.ready, field, value)
+            await websocket.send(command.SerializeToString())
+            reply = pb.ServerMessage.FromString(await websocket.recv())
+
+            assert reply.protocol_error.code == expected_code
+            assert reply.protocol_error.close_session is True
+            with pytest.raises(ConnectionClosed):
+                await websocket.recv()
