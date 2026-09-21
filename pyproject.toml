@@ -10,6 +10,12 @@ pythonpath = ["src", "tests"]
 # is an error instead of being silently ignored.
 addopts = "--strict-markers --strict-config"
 
+# Every marker a test uses must be listed here (that's --strict-markers).
+# Select or skip them with `-m`, e.g. `pytest -m live` or `pytest -m "not live"`.
+markers = [
+    "live: starts the real practice server inside the container (package K); slow",
+]
+
 # Treat warnings as errors. Our versions are pinned, so the set of warnings
 # is stable -- and a deprecation warning today is a crash after the next
 # upgrade. (protobuf 7 already removed FieldDescriptor.label, which a lot of
