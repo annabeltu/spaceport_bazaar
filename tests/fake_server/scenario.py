@@ -26,6 +26,7 @@ class Scenario:
     snapshot_sequence: int
     next_step: int
     stored_results: tuple[bytes, ...]
+    request_records: tuple[tuple[str, bytes, bytes], ...]
 
     @classmethod
     def create(cls, run_id: str) -> Scenario:
@@ -36,6 +37,7 @@ class Scenario:
             snapshot_sequence=1,
             next_step=1,
             stored_results=(),
+            request_records=(),
         )
 
     def initial_message(self) -> pb.ServerMessage:
@@ -82,6 +84,12 @@ class Scenario:
         if not self.ready:
             return self, (self._bad_message(getattr(command, "request_id", None)),)
 
+        request_id = getattr(command, "request_id", None)
+        if request_id is not None:
+            retry = self._retry(request_id, message.SerializeToString())
+            if retry is not None:
+                return retry
+
         handlers = {
             2: self._step_2,
             3: self._step_3,
@@ -93,7 +101,7 @@ class Scenario:
         handler = handlers.get(self.next_step)
         if handler is None:
             raise ValueError("scenario mismatch")
-        return handler(command_name, command)
+        return handler(command_name, command, message.SerializeToString())
 
     def _state(self) -> pb.ServerMessage:
         return build_state(
@@ -119,6 +127,7 @@ class Scenario:
         *,
         object_id: str | None = None,
         transaction_id: str | None = None,
+        request_bytes: bytes,
     ) -> tuple[Scenario, pb.ServerMessage]:
         result = build_result(
             self.run_id,
@@ -128,38 +137,81 @@ class Scenario:
             transaction_id=transaction_id,
         )
         stored = self.stored_results + (result.result.SerializeToString(),)
+        records = self.request_records + (
+            (request_id, request_bytes, result.result.SerializeToString()),
+        )
         updated = replace(
             self,
             world_version=world_version,
             snapshot_sequence=self.snapshot_sequence + 1,
             next_step=next_step,
             stored_results=stored,
+            request_records=records,
         )
         return updated, result
 
-    def _step_2(self, name: str, command) -> tuple[Scenario, tuple[pb.ServerMessage, ...]]:
+    def _retry(
+        self, request_id: str, request_bytes: bytes
+    ) -> tuple[Scenario, tuple[pb.ServerMessage, ...]] | None:
+        for saved_id, saved_request, saved_result in self.request_records:
+            if saved_id != request_id:
+                continue
+            if saved_request == request_bytes:
+                result = pb.ServerMessage()
+                result.result.ParseFromString(saved_result)
+            else:
+                result = build_result(
+                    self.run_id,
+                    request_id,
+                    self.world_version,
+                    ok=False,
+                    code=pb.RESULT_CODE_REQUEST_ID_CONFLICT,
+                )
+            updated = replace(self, snapshot_sequence=self.snapshot_sequence + 1)
+            return updated, (result, updated._state())
+        return None
+
+    def _step_2(self, name: str, command, request_bytes: bytes):
         if name != "advertise" or command.request_id != "student-advertise-1":
             raise ValueError("scenario mismatch")
-        updated, result = self._success(command.request_id, 3, 3, object_id="fake-p01-advertisement-1")
+        updated, result = self._success(
+            command.request_id,
+            3,
+            3,
+            object_id="fake-p01-advertisement-1",
+            request_bytes=request_bytes,
+        )
         return updated, (result, updated._state())
 
-    def _step_3(self, name: str, command) -> tuple[Scenario, tuple[pb.ServerMessage, ...]]:
+    def _step_3(self, name: str, command, request_bytes: bytes):
         if name != "advertise" or command.request_id != "student-advertise-seeking-1":
             raise ValueError("scenario mismatch")
-        updated, result = self._success(command.request_id, 4, 4, object_id="fake-p01-advertisement-2")
+        updated, result = self._success(
+            command.request_id,
+            4,
+            4,
+            object_id="fake-p01-advertisement-2",
+            request_bytes=request_bytes,
+        )
         return updated, (result, updated._state())
 
-    def _step_4(self, name: str, command) -> tuple[Scenario, tuple[pb.ServerMessage, ...]]:
+    def _step_4(self, name: str, command, request_bytes: bytes):
         if name != "offer" or command.request_id != "student-offer-1":
             raise ValueError("scenario mismatch")
-        updated, result = self._success(command.request_id, 5, 7, object_id="fake-p01-offer-1")
+        updated, result = self._success(
+            command.request_id,
+            5,
+            7,
+            object_id="fake-p01-offer-1",
+            request_bytes=request_bytes,
+        )
         state_5 = updated._state()
         updated = replace(updated, world_version=6, snapshot_sequence=5)
         state_6 = updated._state()
         updated = replace(updated, world_version=7, snapshot_sequence=6)
         return updated, (result, state_5, state_6, updated._state())
 
-    def _step_7(self, name: str, command) -> tuple[Scenario, tuple[pb.ServerMessage, ...]]:
+    def _step_7(self, name: str, command, request_bytes: bytes):
         if (
             name != "accept"
             or command.request_id != "student-accept-1"
@@ -172,20 +224,27 @@ class Scenario:
             8,
             object_id="fake-p02-gift-1",
             transaction_id="fake-transaction-2",
+            request_bytes=request_bytes,
         )
         return updated, (result, updated._state())
 
-    def _step_8(self, name: str, command) -> tuple[Scenario, tuple[pb.ServerMessage, ...]]:
+    def _step_8(self, name: str, command, request_bytes: bytes):
         if (
             name != "withdraw"
             or command.request_id != "student-withdraw-1"
             or command.body.object_id != "fake-p01-advertisement-2"
         ):
             raise ValueError("scenario mismatch")
-        updated, result = self._success(command.request_id, 9, 9, object_id=command.body.object_id)
+        updated, result = self._success(
+            command.request_id,
+            9,
+            9,
+            object_id=command.body.object_id,
+            request_bytes=request_bytes,
+        )
         return updated, (result, updated._state())
 
-    def _step_9(self, name: str, command) -> tuple[Scenario, tuple[pb.ServerMessage, ...]]:
+    def _step_9(self, name: str, command, request_bytes: bytes):
         if name != "advertise" or command.request_id != "student-advertise-2":
             raise ValueError("scenario mismatch")
         error = build_protocol_error(
