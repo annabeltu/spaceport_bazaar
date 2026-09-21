@@ -138,31 +138,16 @@ def _add_transaction(
     transaction.settled_version = settled_version
 
 
-def build_state(
-    run_id: str,
-    snapshot_sequence: int,
-    world_version: int,
-    stored_results: tuple[bytes, ...] = (),
-) -> pb.ServerMessage:
-    message = pb.ServerMessage()
-    state = message.state
-    state.type = pb.STATE_TYPE_STATE
-    state.protocol_version = PROTOCOL_VERSION
-    state.run_id = run_id
-    state.snapshot_sequence = snapshot_sequence
-    state.world_version = world_version
-    state.tick = 0
-    state.phase = pb.PHASE_RUNNING
-    state.self_station_id = "P01"
-    _set_rules(state.rules)
-
+def _set_directory(state: pb.State) -> None:
     for station_id, display_name in (("P01", "Planet P01"), ("P02", "Planet P02")):
         entry = state.directory.items.add()
         entry.station_id = station_id
         entry.display_name = display_name
 
-    _set_station_defaults(state.self, world_version)
 
+def _set_advertisements(state: pb.State, world_version: int) -> None:
+    # UNVERIFIED: the spec doesn't publish object-ID formats. Package K replaces
+    # these deterministic fake IDs if recordings reveal a useful convention.
     _add_advertisement(
         state,
         "fake-p02-advertisement",
@@ -172,16 +157,18 @@ def build_state(
         1,
     )
     if 3 <= world_version <= 8:
-        first_advertisement = world_version == 3
+        first = world_version == 3
         _add_advertisement(
             state,
-            "fake-p01-advertisement-1" if first_advertisement else "fake-p01-advertisement-2",
+            "fake-p01-advertisement-1" if first else "fake-p01-advertisement-2",
             "P01",
-            (pb.RESOURCE_WATER,) if first_advertisement else (),
-            (pb.RESOURCE_FOOD,) if first_advertisement else (pb.RESOURCE_COMPONENTS,),
-            3 if first_advertisement else 4,
+            (pb.RESOURCE_WATER,) if first else (),
+            (pb.RESOURCE_FOOD,) if first else (pb.RESOURCE_COMPONENTS,),
+            3 if first else 4,
         )
 
+
+def _set_offers(state: pb.State, world_version: int) -> None:
     if world_version >= 5:
         _add_offer(
             state,
@@ -207,6 +194,8 @@ def build_state(
             "fake-transaction-2",
         )
 
+
+def _set_transactions(state: pb.State, world_version: int) -> None:
     if world_version >= 6:
         _add_transaction(
             state,
@@ -230,6 +219,29 @@ def build_state(
             8,
         )
 
+
+def build_state(
+    run_id: str,
+    snapshot_sequence: int,
+    world_version: int,
+    stored_results: tuple[bytes, ...] = (),
+) -> pb.ServerMessage:
+    message = pb.ServerMessage()
+    state = message.state
+    state.type = pb.STATE_TYPE_STATE
+    state.protocol_version = PROTOCOL_VERSION
+    state.run_id = run_id
+    state.snapshot_sequence = snapshot_sequence
+    state.world_version = world_version
+    state.tick = 0
+    state.phase = pb.PHASE_RUNNING
+    state.self_station_id = "P01"
+    _set_rules(state.rules)
+    _set_directory(state)
+    _set_station_defaults(state.self, world_version)
+    _set_advertisements(state, world_version)
+    _set_offers(state, world_version)
+    _set_transactions(state, world_version)
     for result_bytes in stored_results:
         state.request_results.items.add().ParseFromString(result_bytes)
     state.offers.SetInParent()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from enum import Enum
 from http import HTTPStatus
 import json
@@ -9,11 +10,13 @@ from pathlib import Path
 
 from websockets.http11 import Request, Response
 from websockets.asyncio.server import ServerConnection, serve
+from google.protobuf.message import DecodeError
 
 from generated import bazaar_pb2 as pb
 
 from fake_server.messages import build_protocol_error
 from fake_server.scenario import Scenario
+from fake_server.wire import InvalidWire, validate_wire
 
 
 SUBPROTOCOL = "bazaar.protobuf.v2"
@@ -52,6 +55,9 @@ class FakeServer:
         self._server = None
         self._scenario = Scenario.create(self.run_id)
         self._mode_triggered = False
+        self._active_connection: ServerConnection | None = None
+        self._connection_lock: asyncio.Lock | None = None
+        self._scenario_lock: asyncio.Lock | None = None
 
     def write_credentials(self, path: Path) -> None:
         """Write the real server's credential shape to a caller-chosen temp path."""
@@ -65,6 +71,8 @@ class FakeServer:
         path.write_text(json.dumps(data, indent=2) + "\n")
 
     async def __aenter__(self) -> FakeServer:
+        self._connection_lock = asyncio.Lock()
+        self._scenario_lock = asyncio.Lock()
         select_subprotocol = None
         if self.mode is Mode.WRONG_SUBPROTOCOL:
             select_subprotocol = lambda connection, offered: None
@@ -117,9 +125,7 @@ class FakeServer:
         await websocket.send(message.SerializeToString())
 
     async def _handle_connection(self, websocket: ServerConnection) -> None:
-        scenario = self._scenario.on_new_connection()
-        self._scenario = scenario
-        initial = scenario.initial_message()
+        initial = await self._begin_connection(websocket)
         if self.mode is Mode.NEW_RUN_ID:
             initial.state.run_id = "unexpected-fake-run"
         await self._send(websocket, initial)
@@ -129,70 +135,113 @@ class FakeServer:
         elif self.mode is Mode.TEXT:
             await websocket.send("not a binary protobuf frame")
 
-        async for frame in websocket:
-            if not isinstance(frame, bytes):
-                error = build_protocol_error(
-                    self.run_id, None, pb.CONTROL_CODE_BAD_MESSAGE, False
-                )
-                await self._send(websocket, error)
-                continue
+        try:
+            async for frame in websocket:
+                if not isinstance(frame, bytes) or len(frame) > 16_384:
+                    await self._send_bad_message(websocket)
+                    continue
+                message = self._parse(frame)
+                if message is None:
+                    await self._send_bad_message(websocket)
+                    continue
+                if await self._handle_mode_before_command(websocket, message):
+                    return
+                replies = await self._apply(message, websocket)
+                if replies is None:
+                    return
+                if await self._send_replies(websocket, replies):
+                    return
+        finally:
+            async with self._connection_lock:
+                if self._active_connection is websocket:
+                    self._active_connection = None
 
-            message = pb.ClientMessage()
+    async def _begin_connection(self, websocket: ServerConnection) -> pb.ServerMessage:
+        async with self._connection_lock:
+            async with self._scenario_lock:
+                previous = self._active_connection
+                if previous is not None and previous is not websocket:
+                    # UNVERIFIED: the spec doesn't name the old connection's exact
+                    # response. Package K checks SESSION_FENCED against a recording.
+                    fenced = build_protocol_error(
+                        self.run_id, None, pb.CONTROL_CODE_SESSION_FENCED, True
+                    )
+                    await self._send(previous, fenced)
+                    await previous.close(code=1008, reason="session fenced")
+                self._active_connection = websocket
+                self._scenario = self._scenario.on_new_connection()
+                return self._scenario.initial_message()
+
+    def _parse(self, frame: bytes) -> pb.ClientMessage | None:
+        message = pb.ClientMessage()
+        try:
+            validate_wire(frame, pb.ClientMessage.DESCRIPTOR)
+            message.ParseFromString(frame)
+        except (DecodeError, InvalidWire):
+            return None
+        if not message.IsInitialized() or message.WhichOneof("message") is None:
+            return None
+        return message
+
+    async def _send_bad_message(self, websocket: ServerConnection) -> None:
+        error = build_protocol_error(
+            self.run_id, None, pb.CONTROL_CODE_BAD_MESSAGE, False
+        )
+        await self._send(websocket, error)
+
+    async def _handle_mode_before_command(
+        self, websocket: ServerConnection, message: pb.ClientMessage
+    ) -> bool:
+        stored = pb.ClientMessage()
+        stored.CopyFrom(message)
+        self.received.append(stored)
+        if (
+            self.mode is Mode.CLOSE_SESSION
+            and not self._mode_triggered
+            and len(self.received) >= self.trigger_after_messages
+        ):
+            self._mode_triggered = True
+            error = build_protocol_error(
+                self.run_id, None, pb.CONTROL_CODE_SESSION_FENCED, True
+            )
+            await self._send(websocket, error)
+            await websocket.close(code=1008, reason="protocol error")
+            return True
+        return False
+
+    async def _apply(
+        self, message: pb.ClientMessage, websocket: ServerConnection
+    ) -> tuple[pb.ServerMessage, ...] | None:
+        async with self._scenario_lock:
             try:
-                message.ParseFromString(frame)
-            except Exception:
-                error = build_protocol_error(
-                    self.run_id, None, pb.CONTROL_CODE_BAD_MESSAGE, False
-                )
-                await self._send(websocket, error)
-                continue
-            if not message.IsInitialized() or message.WhichOneof("message") is None:
-                error = build_protocol_error(
-                    self.run_id, None, pb.CONTROL_CODE_BAD_MESSAGE, False
-                )
-                await self._send(websocket, error)
-                continue
+                scenario, replies = self._scenario.handle(message)
+            except ValueError as error:
+                if str(error) != "scenario mismatch":
+                    raise
+                # UNVERIFIED: the spec says the report ends the run, but doesn't
+                # state a close code or reason. Package K checks the real behavior.
+                await websocket.close(code=1008, reason="scenario mismatch")
+                return None
+            self._scenario = scenario
+            return replies
 
-            stored = pb.ClientMessage()
-            stored.CopyFrom(message)
-            self.received.append(stored)
+    async def _send_replies(
+        self, websocket: ServerConnection, replies: tuple[pb.ServerMessage, ...]
+    ) -> bool:
+        for reply in replies:
+            await self._send(websocket, reply)
             if (
-                self.mode is Mode.CLOSE_SESSION
+                self.mode is Mode.DROP
                 and not self._mode_triggered
                 and len(self.received) >= self.trigger_after_messages
             ):
                 self._mode_triggered = True
-                error = build_protocol_error(
-                    self.run_id,
-                    None,
-                    pb.CONTROL_CODE_SESSION_FENCED,
-                    True,
-                )
-                await self._send(websocket, error)
+                websocket.transport.abort()
+                return True
+            if (
+                reply.WhichOneof("message") == "protocol_error"
+                and reply.protocol_error.close_session
+            ):
                 await websocket.close(code=1008, reason="protocol error")
-                return
-
-            try:
-                scenario, replies = scenario.handle(message)
-            except ValueError as error:
-                if str(error) != "scenario mismatch":
-                    raise
-                await websocket.close(code=1008, reason="scenario mismatch")
-                return
-            self._scenario = scenario
-            for reply in replies:
-                await self._send(websocket, reply)
-                if (
-                    self.mode is Mode.DROP
-                    and not self._mode_triggered
-                    and len(self.received) >= self.trigger_after_messages
-                ):
-                    self._mode_triggered = True
-                    websocket.transport.abort()
-                    return
-                if (
-                    reply.WhichOneof("message") == "protocol_error"
-                    and reply.protocol_error.close_session
-                ):
-                    await websocket.close(code=1008, reason="protocol error")
-                    return
+                return True
+        return False
