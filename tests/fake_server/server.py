@@ -10,6 +10,7 @@ from pathlib import Path
 
 from websockets.http11 import Request, Response
 from websockets.asyncio.server import ServerConnection, serve
+from websockets.exceptions import ConnectionClosed
 from google.protobuf.message import DecodeError
 
 from generated import bazaar_pb2 as pb
@@ -56,6 +57,7 @@ class FakeServer:
         self._scenario = Scenario.create(self.run_id)
         self._mode_triggered = False
         self._active_connection: ServerConnection | None = None
+        self._connection_generation = 0
         self._connection_lock: asyncio.Lock | None = None
         self._scenario_lock: asyncio.Lock | None = None
 
@@ -125,7 +127,8 @@ class FakeServer:
         await websocket.send(message.SerializeToString())
 
     async def _handle_connection(self, websocket: ServerConnection) -> None:
-        initial = await self._begin_connection(websocket)
+        initial, generation, previous = await self._begin_connection(websocket)
+        await self._fence_previous(previous)
         if self.mode is Mode.NEW_RUN_ID:
             initial.state.run_id = "unexpected-fake-run"
         await self._send(websocket, initial)
@@ -146,7 +149,7 @@ class FakeServer:
                     continue
                 if await self._handle_mode_before_command(websocket, message):
                     return
-                replies = await self._apply(message, websocket)
+                replies = await self._apply(message, websocket, generation)
                 if replies is None:
                     return
                 if await self._send_replies(websocket, replies):
@@ -156,21 +159,36 @@ class FakeServer:
                 if self._active_connection is websocket:
                     self._active_connection = None
 
-    async def _begin_connection(self, websocket: ServerConnection) -> pb.ServerMessage:
+    async def _begin_connection(
+        self, websocket: ServerConnection
+    ) -> tuple[pb.ServerMessage, int, ServerConnection | None]:
         async with self._connection_lock:
             async with self._scenario_lock:
                 previous = self._active_connection
-                if previous is not None and previous is not websocket:
-                    # UNVERIFIED: the spec doesn't name the old connection's exact
-                    # response. Package K checks SESSION_FENCED against a recording.
-                    fenced = build_protocol_error(
-                        self.run_id, None, pb.CONTROL_CODE_SESSION_FENCED, True
-                    )
-                    await self._send(previous, fenced)
-                    await previous.close(code=1008, reason="session fenced")
                 self._active_connection = websocket
+                self._connection_generation += 1
                 self._scenario = self._scenario.on_new_connection()
-                return self._scenario.initial_message()
+                return (
+                    self._scenario.initial_message(),
+                    self._connection_generation,
+                    previous,
+                )
+
+    async def _fence_previous(
+        self, previous: ServerConnection | None
+    ) -> None:
+        if previous is None:
+            return
+        # UNVERIFIED: the spec doesn't name the old connection's exact
+        # response. Package K checks SESSION_FENCED against a recording.
+        fenced = build_protocol_error(
+            self.run_id, None, pb.CONTROL_CODE_SESSION_FENCED, True
+        )
+        try:
+            await self._send(previous, fenced)
+            await previous.close(code=1008, reason="session fenced")
+        except ConnectionClosed:
+            pass
 
     def _parse(self, frame: bytes) -> pb.ClientMessage | None:
         message = pb.ClientMessage()
@@ -210,9 +228,17 @@ class FakeServer:
         return False
 
     async def _apply(
-        self, message: pb.ClientMessage, websocket: ServerConnection
+        self,
+        message: pb.ClientMessage,
+        websocket: ServerConnection,
+        generation: int,
     ) -> tuple[pb.ServerMessage, ...] | None:
         async with self._scenario_lock:
+            if (
+                generation != self._connection_generation
+                or websocket is not self._active_connection
+            ):
+                return None
             try:
                 scenario, replies = self._scenario.handle(message)
             except ValueError as error:
