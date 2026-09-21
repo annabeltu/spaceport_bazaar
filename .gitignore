@@ -1,0 +1,6 @@
+.venv/
+generated/
+__pycache__/
+*.py[cod]
+starter/validation-credentials.json
+starter/validation-report.json

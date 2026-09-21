@@ -1,0 +1,29 @@
+{
+  "name": "Spaceport Bazaar",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "forwardPorts": [3001],
+  "portsAttributes": {
+    "3001": {
+      "label": "Bazaar practice server",
+      "onAutoForward": "silent"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "zxh404.vscode-proto3",
+        "openai.chatgpt"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python",
+        "python.terminal.activateEnvironment": true
+      }
+    }
+  }
+}
