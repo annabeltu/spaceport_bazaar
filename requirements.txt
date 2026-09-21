@@ -1,0 +1,21 @@
+# Exact versions, pinned on purpose. With ">=" a new release can install
+# itself the next time the container is rebuilt and break things with no code
+# change on our side. To upgrade: change a number here deliberately, rebuild,
+# and rerun the tests.
+#
+# Resolved and tested together on 2026-09-21.
+
+# WebSocket client. It can set a custom Authorization header -- a browser's
+# built-in WebSocket API cannot, which is why the client is a real program
+# rather than a web page. (v14+ calls that option `additional_headers`.)
+websockets==17.1
+
+# grpcio-tools bundles the protoc compiler. `protobuf` is the runtime library
+# the generated code imports. These two must agree; this pair is the one
+# grpcio-tools itself selected, so they're known to match.
+grpcio-tools==1.84.0
+protobuf==7.36.2
+
+# Testing.
+pytest==9.1.1
+pytest-asyncio==1.4.0
