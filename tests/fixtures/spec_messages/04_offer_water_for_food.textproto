@@ -1,0 +1,13 @@
+# Spec step 4: Offer two water for one food.
+# Copied verbatim from the starter README (bazaar-protobuf-starter-linux/README.md).
+# Do not edit by hand -- this is an answer key.
+offer {
+  type: OFFER_COMMAND_TYPE_OFFER
+  protocol_version: "2.0" run_id: "<RUN_ID>" request_id: "student-offer-1"
+  body {
+    recipient_id: "P02"
+    give { water: 2 food: 0 components: 0 }
+    receive { water: 0 food: 1 components: 0 }
+    expires_tick: 6
+  }
+}

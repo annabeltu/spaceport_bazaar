@@ -1,0 +1,8 @@
+# Spec step 3: Replace your advertisement with a request for components.
+# Copied verbatim from the starter README (bazaar-protobuf-starter-linux/README.md).
+# Do not edit by hand -- this is an answer key.
+advertise {
+  type: ADVERTISE_TYPE_ADVERTISE
+  protocol_version: "2.0" run_id: "<RUN_ID>" request_id: "student-advertise-seeking-1"
+  body { selling {} seeking { items: RESOURCE_COMPONENTS } expires_tick: 6 }
+}

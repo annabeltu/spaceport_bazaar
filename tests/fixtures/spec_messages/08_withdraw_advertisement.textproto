@@ -1,0 +1,8 @@
+# Spec step 8: Remove your advertisement.
+# Copied verbatim from the starter README (bazaar-protobuf-starter-linux/README.md).
+# Do not edit by hand -- this is an answer key.
+withdraw {
+  type: WITHDRAW_TYPE_WITHDRAW
+  protocol_version: "2.0" run_id: "<RUN_ID>" request_id: "student-withdraw-1"
+  body { object_id: "<ADVERTISEMENT_ID>" }
+}

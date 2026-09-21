@@ -1,0 +1,8 @@
+# Spec step 2: Advertise water for food.
+# Copied verbatim from the starter README (bazaar-protobuf-starter-linux/README.md).
+# Do not edit by hand -- this is an answer key.
+advertise {
+  type: ADVERTISE_TYPE_ADVERTISE
+  protocol_version: "2.0" run_id: "<RUN_ID>" request_id: "student-advertise-1"
+  body { selling { items: RESOURCE_WATER } seeking { items: RESOURCE_FOOD } expires_tick: 6 }
+}

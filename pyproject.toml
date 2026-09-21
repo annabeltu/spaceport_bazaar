@@ -1,0 +1,17 @@
+# Tool settings for this project. Right now this only configures pytest.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# Lets tests import the generated code (`from generated import bazaar_pb2`,
+# in src/) and the shared test helpers (`from spec import ...`, in tests/).
+pythonpath = ["src", "tests"]
+
+# --strict-markers / --strict-config: a typo in a test marker or a setting
+# is an error instead of being silently ignored.
+addopts = "--strict-markers --strict-config"
+
+# Treat warnings as errors. Our versions are pinned, so the set of warnings
+# is stable -- and a deprecation warning today is a crash after the next
+# upgrade. (protobuf 7 already removed FieldDescriptor.label, which a lot of
+# older example code still uses.)
+filterwarnings = ["error"]

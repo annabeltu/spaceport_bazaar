@@ -1,0 +1,8 @@
+# Spec step 7: Accept the gift.
+# Copied verbatim from the starter README (bazaar-protobuf-starter-linux/README.md).
+# Do not edit by hand -- this is an answer key.
+accept {
+  type: ACCEPT_TYPE_ACCEPT
+  protocol_version: "2.0" run_id: "<RUN_ID>" request_id: "student-accept-1"
+  body { offer_id: "<ZERO_PRICE_OFFER_ID>" }
+}
