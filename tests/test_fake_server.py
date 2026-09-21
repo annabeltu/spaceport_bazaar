@@ -1,8 +1,12 @@
 """Tests for the independent Spaceport Bazaar fake server."""
 
+import pytest
+from websockets.asyncio.client import connect
+
 from generated import bazaar_pb2 as pb
 
 from fake_server.scenario import Scenario
+from fake_server.server import FakeServer
 from spec import load_spec_message
 
 
@@ -116,3 +120,55 @@ def test_pure_scenario_plays_the_complete_exchange_from_answer_keys():
     assert capacity_error.code == pb.CONTROL_CODE_REQUEST_CAPACITY_EXCEEDED
     assert capacity_error.close_session is False
     assert capacity_error.request_id.value == "student-advertise-2"
+
+
+@pytest.mark.asyncio
+async def test_real_socket_plays_the_complete_exchange():
+    async with FakeServer() as server:
+        async with connect(
+            server.url,
+            additional_headers={"Authorization": f"Bearer {server.token}"},
+            subprotocols=["bazaar.protobuf.v2"],
+        ) as websocket:
+            first = pb.ServerMessage.FromString(await websocket.recv())
+            assert first.state.run_id == server.run_id
+
+            placeholders = {"RUN_ID": server.run_id}
+            filenames_and_reply_counts = (
+                ("01_ready.textproto", 1),
+                ("02_advertise_water_for_food.textproto", 2),
+                ("03_advertise_seeking_components.textproto", 2),
+                ("04_offer_water_for_food.textproto", 4),
+                ("07_accept_gift.textproto", 2),
+                ("08_withdraw_advertisement.textproto", 2),
+                ("09_advertise_over_request_limit.textproto", 1),
+                ("10_sync.textproto", 1),
+            )
+            received = [first]
+
+            for filename, reply_count in filenames_and_reply_counts:
+                outgoing = load_spec_message(filename, placeholder_values=placeholders)
+                await websocket.send(outgoing.SerializeToString())
+                replies = [
+                    pb.ServerMessage.FromString(await websocket.recv())
+                    for _ in range(reply_count)
+                ]
+                received.extend(replies)
+                if filename == "03_advertise_seeking_components.textproto":
+                    placeholders["ADVERTISEMENT_ID"] = replies[0].result.object_id.value
+                if filename == "04_offer_water_for_food.textproto":
+                    gift = next(
+                        offer
+                        for offer in replies[-1].state.offers.items
+                        if offer.proposer_id == "P02"
+                        and offer.status == pb.OFFER_STATUS_OPEN
+                    )
+                    placeholders["ZERO_PRICE_OFFER_ID"] = gift.offer_id
+
+    assert len(server.received) == 8
+    assert len(server.sent) == 16
+    assert len(received) == 16
+    assert received[-1].state.self.inventory.water == 28
+    assert received[-1].state.self.inventory.food == 31
+    assert received[-1].state.self.inventory.components == 31
+    assert all(message.IsInitialized() for message in server.sent)
