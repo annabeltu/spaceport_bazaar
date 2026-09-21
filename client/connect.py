@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Connect to the practice server and complete its readiness handshake."""
+"""Connect to the practice server and complete its readiness handshake.
+
+Run inside the dev container, with the server already running in another
+terminal (`bash scripts/run_server.sh`):
+
+    python client/connect.py
+    python client/connect.py --credentials /some/other/validation-credentials.json
+"""
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 from pathlib import Path
@@ -12,23 +20,25 @@ from google.protobuf import text_format
 from websockets.asyncio.client import connect
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+# The generated protobuf code lives in src/generated in this repo.
+sys.path.insert(0, str(ROOT / "src"))
 
 from generated import bazaar_pb2  # noqa: E402
 
 
-CREDENTIALS = ROOT / "starter" / "validation-credentials.json"
+# scripts/run_server.sh starts the server from the repo root, so that's
+# where the server writes this file.
+DEFAULT_CREDENTIALS = ROOT / "validation-credentials.json"
 URI = "ws://127.0.0.1:3001/ws"
 SUBPROTOCOL = "bazaar.protobuf.v2"
 
 
-def p01_token() -> str:
+def p01_token(credentials: Path) -> str:
     try:
-        data = json.loads(CREDENTIALS.read_text())
+        data = json.loads(credentials.read_text())
     except FileNotFoundError as error:
-        raise SystemExit(
-            f"Missing {CREDENTIALS.relative_to(ROOT)}. Start the server first."
-        ) from error
+        # Show the path as given: it may be outside the repo (e.g. in /tmp).
+        raise SystemExit(f"Missing {credentials}. Start the server first.") from error
 
     player = next(
         (item for item in data.get("players", []) if item.get("station_id") == "P01"),
@@ -47,10 +57,10 @@ def decode(payload: bytes) -> bazaar_pb2.ServerMessage:
     return message
 
 
-async def main() -> None:
+async def main(credentials: Path) -> None:
     async with connect(
         URI,
-        additional_headers={"Authorization": f"Bearer {p01_token()}"},
+        additional_headers={"Authorization": f"Bearer {p01_token(credentials)}"},
         subprotocols=[SUBPROTOCOL],
     ) as websocket:
         if websocket.subprotocol != SUBPROTOCOL:
@@ -134,8 +144,20 @@ async def main() -> None:
             print(text_format.MessageToString(decode(payload), as_utf8=True))
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--credentials",
+        type=Path,
+        default=DEFAULT_CREDENTIALS,
+        help="the server's validation-credentials.json (default: repo root)",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
     try:
-        asyncio.run(main())
+        asyncio.run(main(args.credentials))
     except KeyboardInterrupt:
         pass
