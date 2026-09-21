@@ -110,6 +110,24 @@ async def test_new_connection_fences_an_open_old_connection():
 
 
 @pytest.mark.asyncio
+async def test_stale_connection_generation_cannot_mutate_new_scenario():
+    async with FakeServer() as server:
+        stale_connection = object()
+        current_connection = object()
+        server._active_connection = current_connection
+        server._connection_generation = 2
+        server._scenario = server._scenario.on_new_connection()
+        ready = load_spec_message(
+            "01_ready.textproto", placeholder_values={"RUN_ID": server.run_id}
+        )
+
+        replies = await server._apply(ready, stale_connection, generation=1)
+
+        assert replies is None
+        assert server._scenario.ready is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "bad_frame",
     (
