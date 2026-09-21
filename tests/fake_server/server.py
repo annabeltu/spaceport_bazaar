@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from enum import Enum
 from http import HTTPStatus
+import json
+from pathlib import Path
 
 from websockets.http11 import Request, Response
 from websockets.asyncio.server import ServerConnection, serve
@@ -41,14 +43,26 @@ class FakeServer:
         self.run_id = "fake-run-1"
         # Constructed at runtime so the repository's secret hook can't mistake it
         # for a real credential copied from validation-credentials.json.
-        self.token = "test-token-" + "x" * 20
-        self.p02_token = "test-p02-token-" + "y" * 20
+        self.token = "fake-p01-" + "x" * 55
+        self.p02_token = "fake-p02-" + "y" * 55
+        self.instructor_token = "fake-instructor-" + "z" * 48
         self.url = ""
         self.received: list[pb.ClientMessage] = []
         self.sent: list[pb.ServerMessage] = []
         self._server = None
         self._scenario = Scenario.create(self.run_id)
         self._mode_triggered = False
+
+    def write_credentials(self, path: Path) -> None:
+        """Write the real server's credential shape to a caller-chosen temp path."""
+        data = {
+            "instructor_token": self.instructor_token,
+            "players": [
+                {"token": self.token, "run_id": self.run_id, "station_id": "P01"},
+                {"token": self.p02_token, "run_id": self.run_id, "station_id": "P02"},
+            ],
+        }
+        path.write_text(json.dumps(data, indent=2) + "\n")
 
     async def __aenter__(self) -> FakeServer:
         select_subprotocol = None
@@ -73,6 +87,8 @@ class FakeServer:
     def _check_handshake(
         self, websocket: ServerConnection, request: Request
     ) -> Response | None:
+        if request.path != "/ws":
+            return websocket.respond(HTTPStatus.BAD_REQUEST, "Wrong WebSocket path\n")
         authorization = request.headers.get("Authorization")
         if authorization == f"Bearer {self.p02_token}":
             return websocket.respond(HTTPStatus.BAD_REQUEST, "Only P01 may connect\n")
@@ -156,7 +172,13 @@ class FakeServer:
                 await websocket.close(code=1008, reason="protocol error")
                 return
 
-            scenario, replies = scenario.handle(message)
+            try:
+                scenario, replies = scenario.handle(message)
+            except ValueError as error:
+                if str(error) != "scenario mismatch":
+                    raise
+                await websocket.close(code=1008, reason="scenario mismatch")
+                return
             self._scenario = scenario
             for reply in replies:
                 await self._send(websocket, reply)
