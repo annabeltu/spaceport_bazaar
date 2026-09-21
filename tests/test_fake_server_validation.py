@@ -131,11 +131,15 @@ async def test_wire_format_violations_are_bad_messages(bad_frame):
             ready = load_spec_message(
                 "01_ready.textproto", placeholder_values={"RUN_ID": server.run_id}
             ).SerializeToString()
+            inner = bytearray(ready[2:])
+            duplicate = bytes(inner) + b"\x12\x03" + b"1.0"
+            unknown_enum = bytearray(inner)
+            unknown_enum[1] = 99
             frames = {
                 "oversized": ready + b"\x00" * (16_385 - len(ready)),
                 "unknown-field": ready + b"\xa0\x06\x01",
-                "duplicate-field": ready + b"\x12\x03" + b"1.0",
-                "unknown-enum": ready[:-1] + b"\x08\x63",
+                "duplicate-field": b"\x32" + bytes([len(duplicate)]) + duplicate,
+                "unknown-enum": b"\x32" + bytes([len(unknown_enum)]) + unknown_enum,
             }
             await websocket.send(frames[bad_frame.decode()])
             response = pb.ServerMessage.FromString(await websocket.recv())

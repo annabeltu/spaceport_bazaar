@@ -171,12 +171,20 @@ class Scenario:
                     ok=False,
                     code=pb.RESULT_CODE_REQUEST_ID_CONFLICT,
                 )
+            # UNVERIFIED: the spec promises a conflict result but doesn't say
+            # whether a state follows it. Package K checks this extra state.
             updated = replace(self, snapshot_sequence=self.snapshot_sequence + 1)
             return updated, (result, updated._state())
         return None
 
     def _step_2(self, name: str, command, request_bytes: bytes):
-        if name != "advertise" or command.request_id != "student-advertise-1":
+        if not _matches_advertise(
+            name,
+            command,
+            request_id="student-advertise-1",
+            selling=(pb.RESOURCE_WATER,),
+            seeking=(pb.RESOURCE_FOOD,),
+        ):
             raise ValueError("scenario mismatch")
         updated, result = self._success(
             command.request_id,
@@ -188,7 +196,13 @@ class Scenario:
         return updated, (result, updated._state())
 
     def _step_3(self, name: str, command, request_bytes: bytes):
-        if name != "advertise" or command.request_id != "student-advertise-seeking-1":
+        if not _matches_advertise(
+            name,
+            command,
+            request_id="student-advertise-seeking-1",
+            selling=(),
+            seeking=(pb.RESOURCE_COMPONENTS,),
+        ):
             raise ValueError("scenario mismatch")
         updated, result = self._success(
             command.request_id,
@@ -200,7 +214,7 @@ class Scenario:
         return updated, (result, updated._state())
 
     def _step_4(self, name: str, command, request_bytes: bytes):
-        if name != "offer" or command.request_id != "student-offer-1":
+        if not _matches_offer(name, command):
             raise ValueError("scenario mismatch")
         updated, result = self._success(
             command.request_id,
@@ -249,7 +263,13 @@ class Scenario:
         return updated, (result, updated._state())
 
     def _step_9(self, name: str, command, request_bytes: bytes):
-        if name != "advertise" or command.request_id != "student-advertise-2":
+        if not _matches_advertise(
+            name,
+            command,
+            request_id="student-advertise-2",
+            selling=(pb.RESOURCE_WATER,),
+            seeking=(pb.RESOURCE_FOOD,),
+        ):
             raise ValueError("scenario mismatch")
         error = build_protocol_error(
             self.run_id,
@@ -258,3 +278,35 @@ class Scenario:
             False,
         )
         return replace(self, next_step=10), (error,)
+
+
+def _matches_advertise(
+    name: str,
+    command,
+    *,
+    request_id: str,
+    selling: tuple[int, ...],
+    seeking: tuple[int, ...],
+) -> bool:
+    return (
+        name == "advertise"
+        and command.request_id == request_id
+        and tuple(command.body.selling.items) == selling
+        and tuple(command.body.seeking.items) == seeking
+        and command.body.expires_tick == 6
+    )
+
+
+def _matches_offer(name: str, command) -> bool:
+    return (
+        name == "offer"
+        and command.request_id == "student-offer-1"
+        and command.body.recipient_id == "P02"
+        and _bundle_tuple(command.body.give) == (2, 0, 0)
+        and _bundle_tuple(command.body.receive) == (0, 1, 0)
+        and command.body.expires_tick == 6
+    )
+
+
+def _bundle_tuple(bundle: pb.Bundle) -> tuple[int, int, int]:
+    return bundle.water, bundle.food, bundle.components
