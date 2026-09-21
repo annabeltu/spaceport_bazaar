@@ -7,7 +7,7 @@ from websockets.exceptions import ConnectionClosed
 from generated import bazaar_pb2 as pb
 
 from fake_server.scenario import Scenario
-from fake_server.server import FakeServer
+from fake_server.server import FakeServer, ScenarioMismatch
 from spec import load_spec_message
 
 
@@ -125,6 +125,25 @@ async def test_stale_connection_generation_cannot_mutate_new_scenario():
 
         assert replies is None
         assert server._scenario.ready is False
+
+
+@pytest.mark.asyncio
+async def test_scenario_mismatch_leaves_apply_without_socket_io():
+    async with FakeServer() as server:
+        connection = object()
+        server._active_connection = connection
+        server._connection_generation = 1
+        ready = load_spec_message(
+            "01_ready.textproto", placeholder_values={"RUN_ID": server.run_id}
+        )
+        server._scenario, _ = server._scenario.handle(ready)
+        out_of_order = load_spec_message(
+            "04_offer_water_for_food.textproto",
+            placeholder_values={"RUN_ID": server.run_id},
+        )
+
+        with pytest.raises(ScenarioMismatch):
+            await server._apply(out_of_order, connection, generation=1)
 
 
 @pytest.mark.asyncio
