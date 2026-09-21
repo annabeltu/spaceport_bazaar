@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Git runs this file before every commit. If it exits non-zero, the commit
+# is blocked. Its one job: stop the practice server's access tokens from
+# ever being committed. Anything pushed to the course's GitHub org should be
+# treated as visible to other people, and git history keeps it forever.
+#
+# Turned on by:   git config core.hooksPath scripts/hooks
+#                 (scripts/setup.sh does this for you)
+#
+# Written for bash 3.2, the version macOS ships, so it works whether you
+# commit from your Mac or from inside the dev container.
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+found_problem=0
+
+report() {
+  # Never print the secret itself -- only say what kind of thing was found.
+  echo "pre-commit: BLOCKED -- $1" >&2
+  found_problem=1
+}
+
+# Files being added or changed in this commit (A=added, C=copied,
+# M=modified, R=renamed). Deletions are always allowed.
+staged_files="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+# Only the lines this commit ADDS. We skip the "+++ b/file" header lines
+# that git prints at the top of each file's diff.
+added_lines="$(git diff --cached -U0 --no-color --diff-filter=ACMR \
+  | grep -E '^\+' | grep -vE '^\+\+\+ ' || true)"
+
+# --- Check 1: files that must never be committed, by name -----------------
+# .gitignore already hides these, but `git add -f` can force them in.
+while IFS= read -r path; do
+  [ -z "$path" ] && continue
+  case "$(basename "$path")" in
+    validation-credentials.json | credentials.json | .env)
+      report "'$path' is a credentials file"
+      ;;
+  esac
+done <<STAGED
+$staged_files
+STAGED
+
+# --- Check 2: the real token values from any local credentials file ------
+# Looking for the actual values means we don't have to guess what a token
+# looks like. This catches a token pasted anywhere, in any format.
+for credential_file in validation-credentials.json credentials.json; do
+  [ -f "$credential_file" ] || continue
+
+  # Pull the value out of every  "token": "..."  or  "instructor_token": "..."
+  tokens="$(grep -oE '"[a-z_]*token"[[:space:]]*:[[:space:]]*"[^"]+"' "$credential_file" \
+    | sed -E 's/.*:[[:space:]]*"([^"]+)"$/\1/' || true)"
+
+  while IFS= read -r token; do
+    [ -z "$token" ] && continue
+    if printf '%s\n' "$added_lines" | grep -qF -- "$token"; then
+      report "staged changes contain a live token from $credential_file"
+    fi
+  done <<TOKENS
+$tokens
+TOKENS
+done
+
+# --- Check 3: token-shaped text, as a backstop ----------------------------
+# For when no credentials file is present (e.g. the server was restarted
+# and old tokens were copied somewhere).
+if printf '%s\n' "$added_lines" | grep -qE 'Bearer[[:space:]]+[A-Za-z0-9._~+/=-]{20,}'; then
+  report "staged changes contain a hardcoded 'Bearer <token>' value"
+fi
+if printf '%s\n' "$added_lines" | grep -qE '"[a-z_]*token"[[:space:]]*:[[:space:]]*"[^"]{20,}"'; then
+  report "staged changes contain a JSON token value"
+fi
+
+if [ "$found_problem" -ne 0 ]; then
+  echo >&2
+  echo "Unstage the file (git restore --staged <file>) or remove the secret, then commit again." >&2
+  echo "If a token was already pushed, restart the practice server -- that issues new tokens." >&2
+  exit 1
+fi
