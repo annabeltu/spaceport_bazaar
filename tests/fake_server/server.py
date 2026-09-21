@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
+from websockets.http11 import Request, Response
 from websockets.asyncio.server import ServerConnection, serve
 
 from generated import bazaar_pb2 as pb
@@ -21,6 +24,7 @@ class FakeServer:
         # Constructed at runtime so the repository's secret hook can't mistake it
         # for a real credential copied from validation-credentials.json.
         self.token = "test-token-" + "x" * 20
+        self.p02_token = "test-p02-token-" + "y" * 20
         self.url = ""
         self.received: list[pb.ClientMessage] = []
         self.sent: list[pb.ServerMessage] = []
@@ -32,6 +36,7 @@ class FakeServer:
             "127.0.0.1",
             0,
             subprotocols=[SUBPROTOCOL],
+            process_request=self._check_handshake,
         )
         port = self._server.sockets[0].getsockname()[1]
         self.url = f"ws://127.0.0.1:{port}/ws"
@@ -40,6 +45,25 @@ class FakeServer:
     async def __aexit__(self, exc_type, exc_value, traceback) -> None:
         self._server.close()
         await self._server.wait_closed()
+
+    def _check_handshake(
+        self, websocket: ServerConnection, request: Request
+    ) -> Response | None:
+        authorization = request.headers.get("Authorization")
+        if authorization == f"Bearer {self.p02_token}":
+            return websocket.respond(HTTPStatus.BAD_REQUEST, "Only P01 may connect\n")
+        if authorization != f"Bearer {self.token}":
+            return websocket.respond(HTTPStatus.UNAUTHORIZED, "Invalid credentials\n")
+
+        requested_protocols = request.headers.get_all("Sec-WebSocket-Protocol")
+        offered = {
+            protocol.strip()
+            for header in requested_protocols
+            for protocol in header.split(",")
+        }
+        if SUBPROTOCOL not in offered:
+            return websocket.respond(HTTPStatus.BAD_REQUEST, "Wrong message format\n")
+        return None
 
     async def _send(
         self, websocket: ServerConnection, message: pb.ServerMessage
@@ -86,3 +110,9 @@ class FakeServer:
             scenario, replies = scenario.handle(message)
             for reply in replies:
                 await self._send(websocket, reply)
+                if (
+                    reply.WhichOneof("message") == "protocol_error"
+                    and reply.protocol_error.close_session
+                ):
+                    await websocket.close(code=1008, reason="protocol error")
+                    return
