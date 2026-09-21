@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from http import HTTPStatus
 
 from websockets.http11 import Request, Response
@@ -16,10 +17,27 @@ from fake_server.scenario import Scenario
 SUBPROTOCOL = "bazaar.protobuf.v2"
 
 
+class Mode(Enum):
+    HAPPY_PATH = "happy_path"
+    WRONG_SUBPROTOCOL = "wrong_subprotocol"
+    GARBAGE = "garbage"
+    TEXT = "text"
+    CLOSE_SESSION = "close_session"
+    DROP = "drop"
+    NEW_RUN_ID = "new_run_id"
+
+
 class FakeServer:
     """Async context manager exposing a fake Bazaar server on a free port."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        mode: Mode = Mode.HAPPY_PATH,
+        *,
+        trigger_after_messages: int = 1,
+    ) -> None:
+        self.mode = mode
+        self.trigger_after_messages = trigger_after_messages
         self.run_id = "fake-run-1"
         # Constructed at runtime so the repository's secret hook can't mistake it
         # for a real credential copied from validation-credentials.json.
@@ -29,14 +47,20 @@ class FakeServer:
         self.received: list[pb.ClientMessage] = []
         self.sent: list[pb.ServerMessage] = []
         self._server = None
+        self._scenario = Scenario.create(self.run_id)
+        self._mode_triggered = False
 
     async def __aenter__(self) -> FakeServer:
+        select_subprotocol = None
+        if self.mode is Mode.WRONG_SUBPROTOCOL:
+            select_subprotocol = lambda connection, offered: None
         self._server = await serve(
             self._handle_connection,
             "127.0.0.1",
             0,
             subprotocols=[SUBPROTOCOL],
             process_request=self._check_handshake,
+            select_subprotocol=select_subprotocol,
         )
         port = self._server.sockets[0].getsockname()[1]
         self.url = f"ws://127.0.0.1:{port}/ws"
@@ -77,8 +101,17 @@ class FakeServer:
         await websocket.send(message.SerializeToString())
 
     async def _handle_connection(self, websocket: ServerConnection) -> None:
-        scenario = Scenario.create(self.run_id)
-        await self._send(websocket, scenario.initial_message())
+        scenario = self._scenario.on_new_connection()
+        self._scenario = scenario
+        initial = scenario.initial_message()
+        if self.mode is Mode.NEW_RUN_ID:
+            initial.state.run_id = "unexpected-fake-run"
+        await self._send(websocket, initial)
+
+        if self.mode is Mode.GARBAGE:
+            await websocket.send(b"\xff\x00not-a-server-message")
+        elif self.mode is Mode.TEXT:
+            await websocket.send("not a binary protobuf frame")
 
         async for frame in websocket:
             if not isinstance(frame, bytes):
@@ -107,9 +140,34 @@ class FakeServer:
             stored = pb.ClientMessage()
             stored.CopyFrom(message)
             self.received.append(stored)
+            if (
+                self.mode is Mode.CLOSE_SESSION
+                and not self._mode_triggered
+                and len(self.received) >= self.trigger_after_messages
+            ):
+                self._mode_triggered = True
+                error = build_protocol_error(
+                    self.run_id,
+                    None,
+                    pb.CONTROL_CODE_SESSION_FENCED,
+                    True,
+                )
+                await self._send(websocket, error)
+                await websocket.close(code=1008, reason="protocol error")
+                return
+
             scenario, replies = scenario.handle(message)
+            self._scenario = scenario
             for reply in replies:
                 await self._send(websocket, reply)
+                if (
+                    self.mode is Mode.DROP
+                    and not self._mode_triggered
+                    and len(self.received) >= self.trigger_after_messages
+                ):
+                    self._mode_triggered = True
+                    websocket.transport.abort()
+                    return
                 if (
                     reply.WhichOneof("message") == "protocol_error"
                     and reply.protocol_error.close_session

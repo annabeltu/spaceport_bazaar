@@ -41,7 +41,11 @@ class Scenario:
         )
 
     def initial_message(self) -> pb.ServerMessage:
-        return build_initial_state(self.run_id, self.snapshot_sequence)
+        return self._state()
+
+    def on_new_connection(self) -> Scenario:
+        """Keep world progress while resetting connection-local readiness and sequence."""
+        return replace(self, ready=False, snapshot_sequence=1)
 
     def handle(
         self, message: pb.ClientMessage
