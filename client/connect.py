@@ -54,6 +54,13 @@ def decode(payload: bytes) -> bazaar_pb2.ServerMessage:
         raise RuntimeError("Server sent text; binary Protobuf was expected.")
     message = bazaar_pb2.ServerMessage()
     message.ParseFromString(payload)
+    # protobuf 7 doesn't check required fields while parsing, so check here.
+    # Otherwise a missing field would silently read as zero or empty.
+    if not message.IsInitialized():
+        missing = ", ".join(message.FindInitializationErrors())
+        raise RuntimeError(f"Server message is missing required fields: {missing}")
+    if message.WhichOneof("message") is None:
+        raise RuntimeError("Server sent no message (no state, result, etc. was set).")
     return message
 
 
