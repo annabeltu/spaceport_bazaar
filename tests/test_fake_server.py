@@ -169,6 +169,9 @@ async def test_real_socket_plays_the_complete_exchange():
     assert len(server.received) == 8
     assert len(server.sent) == 16
     assert len(received) == 16
+    socket_states = [message.state for message in received if message.HasField("state")]
+    assert [state.world_version for state in socket_states] == [2, 3, 4, 5, 6, 7, 8, 9, 9]
+    assert [state.snapshot_sequence for state in socket_states] == list(range(1, 10))
     assert received[-1].state.self.inventory.water == 28
     assert received[-1].state.self.inventory.food == 31
     assert received[-1].state.self.inventory.components == 31
