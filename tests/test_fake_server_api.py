@@ -50,5 +50,5 @@ async def test_out_of_order_socket_command_closes_with_scenario_mismatch():
             with pytest.raises(ConnectionClosed) as caught:
                 await websocket.recv()
 
-    assert caught.value.reason == "scenario mismatch"
+    assert caught.value.rcvd.reason == "scenario mismatch"
     assert server.received[-1].WhichOneof("message") == "offer"
