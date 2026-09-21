@@ -1,0 +1,17 @@
+{
+  // Open the unpacked course starter read-only in the editor.
+  //
+  // These files must never change: the server binaries are what we verified,
+  // and the README is where the test answer keys come from. On 2026-09-21 an
+  // accidental keystroke in an open README tab (plus autosave) deleted one
+  // character, and the checksum gate stopped setup. This stops the keystroke
+  // from getting that far.
+  //
+  // Why an editor setting instead of `chmod a-w`: inside the dev container on
+  // Docker Desktop for Mac, file permission bits on the shared folder are not
+  // enforced, so a read-only file there can still be written. This setting
+  // works on the Mac and in the container.
+  "files.readonlyInclude": {
+    "bazaar-protobuf-starter-linux/**": true
+  }
+}

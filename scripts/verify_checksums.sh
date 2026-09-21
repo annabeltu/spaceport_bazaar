@@ -58,5 +58,10 @@ if ! printf '%s\n' "$SELECTED_LINES" | $HASH_COMMAND --check --strict -; then
   echo "verify_checksums: CHECKSUM MISMATCH -- do not run these files." >&2
   echo "A file is missing or differs from the version we checked. See the" >&2
   echo "note at the top of scripts/verify_checksums.sh before changing anything." >&2
+  if [ "$SCOPE" = "starter" ]; then
+    echo >&2
+    echo "The unpacked starter is rebuilt from the (separately verified) tarball." >&2
+    echo "To get a clean copy:  rm -rf bazaar-protobuf-starter-linux && bash scripts/setup.sh" >&2
+  fi
   exit 1
 fi
