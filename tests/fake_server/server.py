@@ -33,6 +33,10 @@ class Mode(Enum):
     NEW_RUN_ID = "new_run_id"
 
 
+class ScenarioMismatch(Exception):
+    """The client sent a new command outside the scripted order."""
+
+
 class FakeServer:
     """Async context manager exposing a fake Bazaar server on a free port."""
 
@@ -149,7 +153,11 @@ class FakeServer:
                     continue
                 if await self._handle_mode_before_command(websocket, message):
                     return
-                replies = await self._apply(message, websocket, generation)
+                try:
+                    replies = await self._apply(message, websocket, generation)
+                except ScenarioMismatch:
+                    await websocket.close(code=1008, reason="scenario mismatch")
+                    return
                 if replies is None:
                     return
                 if await self._send_replies(websocket, replies):
@@ -246,8 +254,7 @@ class FakeServer:
                     raise
                 # UNVERIFIED: the spec says the report ends the run, but doesn't
                 # state a close code or reason. Package K checks the real behavior.
-                await websocket.close(code=1008, reason="scenario mismatch")
-                return None
+                raise ScenarioMismatch from None
             self._scenario = scenario
             return replies
 
