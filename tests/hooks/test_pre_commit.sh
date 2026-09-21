@@ -26,6 +26,15 @@ git config core.hooksPath scripts/hooks              || setup_failed "hooksPath"
 git config user.name "hook-test"                     || setup_failed "user.name"
 git config user.email "hook-test@example.invalid"    || setup_failed "user.email"
 
+# If your working-tree hook differs from the committed one (you're editing
+# it), commit it in the clone. Otherwise the reset between tests would put
+# the OLD hook back and you'd be testing stale code.
+git add scripts/hooks/pre-commit                     || setup_failed "stage hook"
+if ! git diff --cached --quiet; then
+  git commit -q -m "test: install the hook under test" \
+    || setup_failed "the hook blocked its own commit"
+fi
+
 random_token() {
   # 64 random hex characters, shaped like the server's tokens.
   head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
@@ -66,16 +75,21 @@ expect() {
   git clean -qfd >/dev/null 2>&1
 }
 
-# The hook contains regex patterns that look a bit like secrets.
-# Make sure it doesn't block its own commit.
-git add scripts/hooks/pre-commit
-expect allowed "committing the hook itself"
+# The hook contains regex patterns that look a bit like secrets. Commit a
+# copy of its full text to make sure it doesn't trip over itself.
+cp scripts/hooks/pre-commit hook-text-copy.sh && git add hook-text-copy.sh
+expect allowed "a file containing the hook's own patterns"
 
 echo "print('hello')" > ok.py && git add ok.py
 expect allowed "ordinary code"
 
 git add -f validation-credentials.json
 expect blocked "force-adding validation-credentials.json"
+
+# A credentials-named file with NO token inside. Only check 1 (block by
+# filename) can catch this -- without it, no test proves check 1 works.
+printf 'DEBUG=1\n' > .env && git add -f .env
+expect blocked "a .env file (caught by filename alone)"
 
 printf 'debug notes\nmy token was %s\n' "$FAKE_TOKEN" > notes.txt && git add notes.txt
 expect blocked "a raw live token pasted into notes"
