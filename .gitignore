@@ -1,0 +1,29 @@
+# The starter tarball lives in artifacts/ and is committed already.
+# The *extracted* copy is reproducible, so we don't commit it again --
+# it contains 4.4MB of binaries, and git history keeps binaries forever.
+bazaar-protobuf-starter-linux/
+
+# Generated protobuf bindings. Regenerate with scripts/gen_proto.sh.
+# Committing generated code invites drift between the .proto and the bindings.
+src/generated/*_pb2.py
+src/generated/*_pb2.pyi
+src/generated/*_pb2_grpc.py
+
+# Files the practice server writes at runtime.
+# validation-credentials.json holds an access token -- never commit it.
+validation-credentials.json
+validation-report.json
+credentials.json
+report.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Editor / OS
+.DS_Store
+.vscode/settings.json
