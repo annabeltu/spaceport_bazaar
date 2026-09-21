@@ -1,0 +1,33 @@
+{
+  "name": "Spaceport Bazaar",
+  "build": {
+    "dockerfile": "Dockerfile",
+    // Build from the repo root so the Dockerfile can COPY requirements.txt.
+    "context": ".."
+  },
+
+  // Run as the ordinary "vscode" user, never root -- both for the container
+  // itself and for the terminals VS Code opens inside it.
+  "containerUser": "vscode",
+  "remoteUser": "vscode",
+
+  // Runs once after the container is created: checks fingerprints, unpacks
+  // the starter, generates Python code, and turns on the git hook.
+  "postCreateCommand": "bash scripts/setup.sh",
+
+  // Deliberately absent:
+  //  - "forwardPorts": the server binds 127.0.0.1 and refuses outside
+  //    connections, so the client must run INSIDE this container anyway.
+  //  - "privileged", "runArgs", "mounts": the container only needs this repo
+  //    folder, which VS Code mounts automatically. Nothing else from your Mac
+  //    is shared with the downloaded server binary.
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "zxh404.vscode-proto3"
+      ]
+    }
+  }
+}
