@@ -41,8 +41,30 @@ random_token() {
 }
 FAKE_TOKEN="$(random_token)"
 FAKE_INSTRUCTOR_TOKEN="$(random_token)"
-printf '{"instructor_token":"%s","players":[{"token":"%s","run_id":"r1","station_id":"P01"}]}\n' \
-  "$FAKE_INSTRUCTOR_TOKEN" "$FAKE_TOKEN" > validation-credentials.json
+FAKE_P02_TOKEN="$(random_token)"
+
+# Same layout the real practice server writes (checked 2026-09-21 with the
+# tokens hidden), so the tests match reality rather than a made-up format.
+write_credentials_like_the_real_server() {
+  cat > validation-credentials.json <<JSON
+{
+  "instructor_token": "$FAKE_INSTRUCTOR_TOKEN",
+  "players": [
+    {
+      "token": "$FAKE_TOKEN",
+      "run_id": "sample-0000000000000000",
+      "station_id": "P01"
+    },
+    {
+      "token": "$FAKE_P02_TOKEN",
+      "run_id": "sample-0000000000000000",
+      "station_id": "P02"
+    }
+  ]
+}
+JSON
+}
+write_credentials_like_the_real_server
 
 passed=0
 failed=0
@@ -56,7 +78,7 @@ expect() {
   exit_code=$?
   if [ "$exit_code" -eq 0 ]; then outcome="allowed"; else outcome="blocked"; fi
 
-  if printf '%s' "$output" | grep -qF -e "$FAKE_TOKEN" -e "$FAKE_INSTRUCTOR_TOKEN"; then
+  if printf '%s' "$output" | grep -qF -e "$FAKE_TOKEN" -e "$FAKE_INSTRUCTOR_TOKEN" -e "$FAKE_P02_TOKEN"; then
     echo "FAIL  $description  (the hook's own output leaked a token)"
     failed=$((failed + 1))
   elif [ "$outcome" = "$wanted" ]; then
@@ -97,11 +119,26 @@ expect blocked "a raw live token pasted into notes"
 printf 'x = "%s"\n' "$FAKE_INSTRUCTOR_TOKEN" > leak.py && git add leak.py
 expect blocked "the instructor token pasted into code"
 
+printf 'p2 = "%s"\n' "$FAKE_P02_TOKEN" > p2.py && git add p2.py
+expect blocked "the second player's token (every token in the file is found)"
+
+# Unusual layout: key and value on different lines. No standard tool writes
+# JSON like this, but the hook shouldn't depend on layout at all.
+printf '{"players": [{"token":\n  "%s"}]}\n' "$FAKE_TOKEN" > validation-credentials.json
+printf 'raw %s\n' "$FAKE_TOKEN" > notes2.txt && git add notes2.txt
+expect blocked "a token from a credentials file with key and value on separate lines"
+write_credentials_like_the_real_server
+
 printf 'headers = {"Authorization": "Bearer %s"}\n' "abcdefghijklmnopqrstuvwxyz0123456789" > client.py && git add client.py
 expect blocked "a hardcoded Bearer header"
 
 printf '{"token": "%s"}\n' "zyxwvutsrqponmlkjihgfedcba987654" > saved.json && git add saved.json
 expect blocked "a JSON token literal in another file"
+
+# Regression test: on 2026-09-21 the hook blocked a commit of THIS test file
+# because a 22-character variable name looked like a token value.
+printf '"instructor_token": "$FAKE_INSTRUCTOR_TOKEN"\n' > fixture_writer.sh && git add fixture_writer.sh
+expect allowed "a shell variable used as a JSON value (must not be a false positive)"
 
 printf '%s  some/file.bin\n' "$(random_token)" > more.sha256 && git add more.sha256
 expect allowed "a 64-hex checksum line (must not be a false positive)"

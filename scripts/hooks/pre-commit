@@ -51,7 +51,11 @@ for credential_file in validation-credentials.json credentials.json; do
   [ -f "$credential_file" ] || continue
 
   # Pull the value out of every  "token": "..."  or  "instructor_token": "..."
-  tokens="$(grep -oE '"[a-z_]*token"[[:space:]]*:[[:space:]]*"[^"]+"' "$credential_file" \
+  # `tr` first joins the whole file onto one line, so this works however the
+  # JSON is laid out. That's safe: a JSON string can't contain a raw line
+  # break, so joining lines can never split or change a token.
+  tokens="$(tr -d '\n\r' < "$credential_file" \
+    | grep -oE '"[a-z_]*token"[[:space:]]*:[[:space:]]*"[^"]+"' \
     | sed -E 's/.*:[[:space:]]*"([^"]+)"$/\1/' || true)"
 
   while IFS= read -r token; do
@@ -70,7 +74,10 @@ done
 if printf '%s\n' "$added_lines" | grep -qE 'Bearer[[:space:]]+[A-Za-z0-9._~+/=-]{20,}'; then
   report "staged changes contain a hardcoded 'Bearer <token>' value"
 fi
-if printf '%s\n' "$added_lines" | grep -qE '"[a-z_]*token"[[:space:]]*:[[:space:]]*"[^"]{20,}"'; then
+# Only values made of token characters count, like the Bearer check above --
+# so a shell variable such as "$SOME_LONG_VARIABLE_NAME" in a test script
+# isn't mistaken for a token.
+if printf '%s\n' "$added_lines" | grep -qE '"[a-z_]*token"[[:space:]]*:[[:space:]]*"[A-Za-z0-9._~+/=-]{20,}"'; then
   report "staged changes contain a JSON token value"
 fi
 
