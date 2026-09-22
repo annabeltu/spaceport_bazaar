@@ -71,6 +71,9 @@ bash tests/scripts/test_verify_checksums.sh   # the fingerprint checks
 The two shell test scripts also run on macOS. They only ever damage
 throwaway copies in a temp directory, never your real files.
 
+Tests marked `live` start the real practice server, so plain `pytest` skips
+them to stay fast. Run them on purpose with `pytest -m live`.
+
 ## Branches
 
 - Name branches `<your-name>-<short-description>`, e.g.
