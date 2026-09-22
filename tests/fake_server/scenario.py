@@ -224,9 +224,17 @@ class Scenario:
             request_bytes=request_bytes,
         )
         state_5 = updated._state()
-        updated = replace(updated, world_version=6, snapshot_sequence=5)
+        updated = replace(
+            updated,
+            world_version=6,
+            snapshot_sequence=updated.snapshot_sequence + 1,
+        )
         state_6 = updated._state()
-        updated = replace(updated, world_version=7, snapshot_sequence=6)
+        updated = replace(
+            updated,
+            world_version=7,
+            snapshot_sequence=updated.snapshot_sequence + 1,
+        )
         return updated, (result, state_5, state_6, updated._state())
 
     def _step_7(self, name: str, command, request_bytes: bytes):
