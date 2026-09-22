@@ -10,7 +10,11 @@ they never reach our code.
 Library pointers: `from websockets.asyncio.client import connect`. After
 connecting, `ws.subprotocol` says which subprotocol the server chose.
 """
+from websockets.asyncio.client import connect as websocket_connect
+from websockets.exceptions import ConnectionClosed, InvalidStatus, WebSocketException
+
 from bazaar_client.credentials import Credentials
+from bazaar_client.errors import ConnectionFailed, ConnectionLost, ProtocolViolation
 
 # The message format the spec requires. The server must confirm exactly this.
 SUBPROTOCOL = "bazaar.protobuf.v2"
@@ -27,6 +31,9 @@ class Connection:
     `websockets` connection object, for example) is package G's choice.
     """
 
+    def __init__(self, websocket) -> None:
+        self._websocket = websocket
+
     async def send(self, data: bytes) -> None:
         """Send `data` as ONE binary WebSocket message.
 
@@ -36,7 +43,12 @@ class Connection:
         Raises ConnectionLost (from bazaar_client.errors) if the connection has
         closed.
         """
-        raise NotImplementedError("package G")
+        if not isinstance(data, bytes):
+            raise TypeError("Connection.send() accepts bytes only.")
+        try:
+            await self._websocket.send(data)
+        except ConnectionClosed as error:
+            raise ConnectionLost("The WebSocket connection closed while sending.") from error
 
     async def receive(self) -> bytes:
         """Wait for the next message from the server and return its bytes.
@@ -44,11 +56,17 @@ class Connection:
         Raises ProtocolViolation for a text frame (the spec only sends binary),
         and ConnectionLost when the connection closes or drops.
         """
-        raise NotImplementedError("package G")
+        try:
+            frame = await self._websocket.recv()
+        except ConnectionClosed as error:
+            raise ConnectionLost("The WebSocket connection closed while receiving.") from error
+        if not isinstance(frame, bytes):
+            raise ProtocolViolation("Server sent a text frame; binary Protobuf was expected.")
+        return frame
 
     async def close(self) -> None:
         """Close the connection. Safe to call more than once."""
-        raise NotImplementedError("package G")
+        await self._websocket.close()
 
 
 async def connect(url: str, credentials: Credentials) -> Connection:
@@ -63,4 +81,33 @@ async def connect(url: str, credentials: Credentials) -> Connection:
     - the server doesn't confirm SUBPROTOCOL (the connection is closed first), or
     - nothing is listening at `url`.
     """
-    raise NotImplementedError("package G")
+    try:
+        websocket = await websocket_connect(
+            url,
+            additional_headers={"Authorization": f"Bearer {credentials.token}"},
+            subprotocols=[SUBPROTOCOL],
+        )
+    except InvalidStatus as error:
+        status = error.response.status_code
+        if status == 401:
+            message = (
+                "Server rejected the credentials with HTTP 401; restart or reread "
+                "the server's credentials file."
+            )
+        elif status == 400:
+            message = (
+                "Server rejected the connection with HTTP 400; check the station, "
+                "URL, and protobuf subprotocol."
+            )
+        else:
+            message = f"Server rejected the WebSocket connection with HTTP {status}."
+        raise ConnectionFailed(message) from error
+    except (OSError, TimeoutError, WebSocketException) as error:
+        raise ConnectionFailed(f"Could not connect to the Bazaar server at {url}.") from error
+
+    if websocket.subprotocol != SUBPROTOCOL:
+        await websocket.close()
+        raise ConnectionFailed(
+            f"Server did not confirm the required {SUBPROTOCOL} subprotocol."
+        )
+    return Connection(websocket)
