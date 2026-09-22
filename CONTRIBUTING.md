@@ -66,13 +66,27 @@ Inside the container:
 pytest                                        # Python tests, about a second
 bash tests/hooks/test_pre_commit.sh           # the secret-blocking hook
 bash tests/scripts/test_verify_checksums.sh   # the fingerprint checks
+bash tests/scripts/test_run_live_check.sh     # the live-check script (container only)
 ```
 
-The two shell test scripts also run on macOS. They only ever damage
+The hook and checksum test scripts also run on macOS. They only ever damage
 throwaway copies in a temp directory, never your real files.
 
 Tests marked `live` start the real practice server, so plain `pytest` skips
 them to stay fast. Run them on purpose with `pytest -m live`.
+
+## Checking a full run against the practice server
+
+Inside the container, with nothing else using port 3001:
+
+```bash
+bash scripts/run_live_check.sh
+```
+
+It starts a fresh practice server in a temp folder, runs the client, checks
+the server's report with `scripts/check_report.py`, and always stops the
+server afterwards. Any arguments replace the client command, and
+`--credentials <file>` is always added to the end.
 
 ## Branches
 
