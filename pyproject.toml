@@ -8,7 +8,18 @@ pythonpath = ["src", "tests"]
 
 # --strict-markers / --strict-config: a typo in a test marker or a setting
 # is an error instead of being silently ignored.
-addopts = "--strict-markers --strict-config"
+# -m 'not live': a plain `pytest` skips tests marked `live`, so it stays fast.
+addopts = "--strict-markers --strict-config -m 'not live'"
+
+# Every marker a test uses must be listed here (that's --strict-markers).
+#   pytest                        everything except live tests (the default)
+#   pytest -m live                only the live tests
+#   pytest -m "live or not live"  everything
+# These work because pytest reads addopts first and then your command line,
+# and when -m is given twice, the last one wins.
+markers = [
+    "live: starts the real practice server inside the container (package K); slow",
+]
 
 # Treat warnings as errors. Our versions are pinned, so the set of warnings
 # is stable -- and a deprecation warning today is a crash after the next
