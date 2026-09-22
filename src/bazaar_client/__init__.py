@@ -23,5 +23,7 @@ as "contracts", so the other packages could be built at the same time.
 How one message flows through them:
 
     receive -> codec.decode -> state.apply_server_message -> engine.decide
-            -> guards.check -> send -> state.record_sent
+            -> guards.check -> send -> state.record_ready (after `ready`)
+                                       or state.record_sent (after a command
+                                       with a request_id)
 """

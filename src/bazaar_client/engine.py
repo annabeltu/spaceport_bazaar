@@ -97,6 +97,8 @@ def decide(
       protocol_error means Stop.
     - When client.is_ready is False (a new connection), the next move is
       `ready` with that connection's snapshot_sequence, then an exact retry of
-      any command whose result never arrived.
+      any command whose result never arrived. If client.sent_ready_sequence
+      isn't None, a `ready` is already waiting for its reply, so Wait instead
+      of sending another.
     """
     raise NotImplementedError("package H")

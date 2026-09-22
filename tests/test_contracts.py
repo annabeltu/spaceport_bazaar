@@ -241,6 +241,11 @@ SIGNATURES = (
         (("client", ClientState), ("request_id", str), ("data", bytes)),
         ClientState,
     ),
+    Signature(
+        state.record_ready,
+        (("client", ClientState), ("snapshot_sequence", int)),
+        ClientState,
+    ),
     Signature(state.on_new_connection, (("client", ClientState),), ClientState),
     Signature(state.guard_context, (("client", ClientState),), GuardContext),
     Signature(
@@ -324,7 +329,8 @@ DATA_TYPES = (
     (
         ClientState,
         (("run_id", str | None), ("snapshot", pb.State | None), ("is_ready", bool),
-         ("results", Mapping[str, pb.Result]), ("sent_requests", Mapping[str, bytes])),
+         ("sent_ready_sequence", int | None), ("results", Mapping[str, pb.Result]),
+         ("sent_requests", Mapping[str, bytes])),
     ),
     (Credentials, (("station_id", str), ("run_id", str), ("token", str))),
     (

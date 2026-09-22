@@ -13,7 +13,7 @@ from bazaar_client.models import ClientState, GuardContext
 
 def initial() -> ClientState:
     """The state before anything has arrived: no run, no snapshot, not ready,
-    and no results or sent requests."""
+    no `ready` sent yet, and no results or sent requests."""
     raise NotImplementedError("package F")
 
 
@@ -26,11 +26,15 @@ def apply_server_message(client: ClientState, message: pb.ServerMessage) -> Clie
       double-counted.
       A state whose run_id differs from client.run_id means the server
       restarted with a new run: the old results and sent requests are thrown
-      away, because their IDs mean nothing in the new run.
+      away, because their IDs mean nothing in the new run. is_ready and
+      sent_ready_sequence are reset too (False and None): readiness was never
+      declared for the new run.
     - `result`: a copy is stored in `results` under its request_id.
-    - `readiness`: sets is_ready only if `ready` is true AND its run_id and
-      snapshot_sequence match the current snapshot (the ones our `ready`
-      declared). A mismatch leaves is_ready unchanged.
+    - `readiness`: sets is_ready only if `ready` is true, its run_id equals
+      client.run_id, AND its snapshot_sequence equals
+      client.sent_ready_sequence: the number our `ready` declared, not the
+      latest state's (another state may have arrived since). If we haven't
+      sent a `ready` (None), or anything differs, is_ready is unchanged.
     - `protocol_error`: changes nothing. The engine decides what it means, and
       the runner follows its close_session.
     """
@@ -48,13 +52,26 @@ def record_sent(client: ClientState, request_id: str, data: bytes) -> ClientStat
     raise NotImplementedError("package F")
 
 
+def record_ready(client: ClientState, snapshot_sequence: int) -> ClientState:
+    """`client` with `snapshot_sequence` saved as sent_ready_sequence.
+
+    The runner calls this right after sending a `ready` command, passing the
+    number that command carried (`message.ready.snapshot_sequence`). The
+    server's `readiness` reply is then checked against it: the spec says the
+    reply must "match your message". This doesn't set is_ready; only that
+    reply can.
+    """
+    raise NotImplementedError("package F")
+
+
 def on_new_connection(client: ClientState) -> ClientState:
     """`client` after the runner opens a new connection.
 
-    Clears is_ready, because readiness is required on EVERY connection. Keeps
-    everything else: the same running server keeps the run's progress, and
-    the new connection's first state (snapshot_sequence 1) replaces the
-    snapshot when it arrives.
+    Clears is_ready and sent_ready_sequence, because readiness is required on
+    EVERY connection: a `ready` sent on the old connection doesn't count on
+    the new one. Keeps everything else: the same running server keeps the
+    run's progress, and the new connection's first state (snapshot_sequence 1)
+    replaces the snapshot when it arrives.
     """
     raise NotImplementedError("package F")
 

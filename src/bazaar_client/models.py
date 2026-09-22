@@ -104,22 +104,28 @@ class ClientState:
     Only state.py builds these, and each of its functions returns a NEW one.
     Start from state.initial().
 
-    run_id:        the current run, copied from the first state. None until
-                   then.
-    snapshot:      the latest `state` message, stored as a copy. Each new state
-                   REPLACES it whole: its inventory already includes every
-                   completed trade, so nothing is ever added to it. None until
-                   the first state arrives.
-    is_ready:      the server confirmed our readiness on THIS connection.
-                   Every new connection starts at False.
-    results:       request_id -> the `result` the server sent for it (copies).
-                   Read-only mapping.
-    sent_requests: request_id -> the exact bytes we sent with that ID.
-                   Read-only mapping.
+    run_id:              the current run, copied from the first state. None
+                         until then.
+    snapshot:            the latest `state` message, stored as a copy. Each
+                         new state REPLACES it whole: its inventory already
+                         includes every completed trade, so nothing is ever
+                         added to it. None until the first state arrives.
+    is_ready:            the server confirmed our readiness on THIS
+                         connection. Every new connection starts at False.
+    sent_ready_sequence: the snapshot_sequence in the last `ready` we sent on
+                         THIS connection. None until we send one. The server's
+                         `readiness` reply must echo exactly this number (the
+                         spec: it must "match your message"), not the latest
+                         state's, because another state can arrive in between.
+    results:             request_id -> the `result` the server sent for it
+                         (copies). Read-only mapping.
+    sent_requests:       request_id -> the exact bytes we sent with that ID.
+                         Read-only mapping.
     """
 
     run_id: str | None
     snapshot: pb.State | None
     is_ready: bool
+    sent_ready_sequence: int | None
     results: Mapping[str, pb.Result]
     sent_requests: Mapping[str, bytes]

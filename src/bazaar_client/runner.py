@@ -33,7 +33,13 @@ async def run(options: RunOptions) -> int:
     The loop, for each message received:
     receive -> codec.decode -> logs.log_received -> state.apply_server_message
     -> engine.decide -> guards.check -> send -> logs.log_sent
-    -> state.record_sent.
+    -> record what was sent:
+       - a `ready` command: state.record_ready(client,
+         message.ready.snapshot_sequence), so the readiness reply is checked
+         against the number we declared;
+       - a command with a request_id (advertise, offer, accept, withdraw):
+         state.record_sent(client, request_id, data);
+       - `sync`: nothing to record.
 
     - It keeps reading even when there's nothing to send (Wait), because the
       server pushes messages on its own.
