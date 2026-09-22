@@ -21,6 +21,10 @@ from generated import bazaar_pb2 as pb
 
 from bazaar_client.models import Amounts
 
+# The spec pins every command to this protocol version. A constant instead of
+# a literal repeated six times means there's exactly one place to change it.
+PROTOCOL_VERSION = "2.0"
+
 
 def build_ready(run_id: str, snapshot_sequence: int, ready: bool) -> pb.ClientMessage:
     """A `ready` command: step 1 (answer key 01_ready.textproto).
@@ -29,7 +33,16 @@ def build_ready(run_id: str, snapshot_sequence: int, ready: bool) -> pb.ClientMe
     THIS connection (1 on a new connection). `ready=False` is allowed and
     still sets the field: in proto2, a required `false` must be present.
     """
-    raise NotImplementedError("package D")
+    message = pb.ClientMessage()
+    ready_command = message.ready
+    ready_command.type = pb.READY_TYPE_READY
+    ready_command.protocol_version = PROTOCOL_VERSION
+    ready_command.run_id = run_id
+    # Setting `ready = False` still touches the field (unlike leaving it
+    # alone), which is what makes a required `false` present on the wire.
+    ready_command.ready = ready
+    ready_command.snapshot_sequence = snapshot_sequence
+    return message
 
 
 def build_advertise(
@@ -47,7 +60,21 @@ def build_advertise(
     In proto2 a sub-message you never touch counts as missing, so call
     `SetInParent()` on it to mark it present.
     """
-    raise NotImplementedError("package D")
+    message = pb.ClientMessage()
+    command = message.advertise
+    command.type = pb.ADVERTISE_TYPE_ADVERTISE
+    command.protocol_version = PROTOCOL_VERSION
+    command.run_id = run_id
+    command.request_id = request_id
+
+    # SetInParent() marks a required sub-message as present even if we add no
+    # items to its list, which is what step 3's `selling {}` needs.
+    command.body.selling.SetInParent()
+    command.body.selling.items.extend(selling)
+    command.body.seeking.SetInParent()
+    command.body.seeking.items.extend(seeking)
+    command.body.expires_tick = expires_tick
+    return message
 
 
 def build_offer(
@@ -63,12 +90,32 @@ def build_offer(
     Amounts are from the proposer's (our) side: `give` is what we pay and
     `receive` is what we ask for. Every amount is sent, zeros included.
     """
-    raise NotImplementedError("package D")
+    message = pb.ClientMessage()
+    command = message.offer
+    command.type = pb.OFFER_COMMAND_TYPE_OFFER
+    command.protocol_version = PROTOCOL_VERSION
+    command.run_id = run_id
+    command.request_id = request_id
+    command.body.recipient_id = recipient_id
+    # to_bundle() already sets water/food/components explicitly, zeros
+    # included, so CopyFrom carries all three over -- never just the ones
+    # that happen to be non-zero.
+    command.body.give.CopyFrom(give.to_bundle())
+    command.body.receive.CopyFrom(receive.to_bundle())
+    command.body.expires_tick = expires_tick
+    return message
 
 
 def build_accept(run_id: str, request_id: str, offer_id: str) -> pb.ClientMessage:
     """An `accept` command: step 7. `offer_id` comes from a state's offers."""
-    raise NotImplementedError("package D")
+    message = pb.ClientMessage()
+    command = message.accept
+    command.type = pb.ACCEPT_TYPE_ACCEPT
+    command.protocol_version = PROTOCOL_VERSION
+    command.run_id = run_id
+    command.request_id = request_id
+    command.body.offer_id = offer_id
+    return message
 
 
 def build_withdraw(run_id: str, request_id: str, object_id: str) -> pb.ClientMessage:
@@ -77,7 +124,14 @@ def build_withdraw(run_id: str, request_id: str, object_id: str) -> pb.ClientMes
     `object_id` is the server's ID for our advertisement: step 3's
     `result.object_id.value` (the spec's ADVERTISEMENT_ID).
     """
-    raise NotImplementedError("package D")
+    message = pb.ClientMessage()
+    command = message.withdraw
+    command.type = pb.WITHDRAW_TYPE_WITHDRAW
+    command.protocol_version = PROTOCOL_VERSION
+    command.run_id = run_id
+    command.request_id = request_id
+    command.body.object_id = object_id
+    return message
 
 
 def build_sync(run_id: str) -> pb.ClientMessage:
@@ -86,4 +140,9 @@ def build_sync(run_id: str) -> pb.ClientMessage:
     Sync has no body and no request_id. It never uses up a stored-result slot,
     and it's allowed even before readiness.
     """
-    raise NotImplementedError("package D")
+    message = pb.ClientMessage()
+    command = message.sync
+    command.type = pb.SYNC_TYPE_SYNC
+    command.protocol_version = PROTOCOL_VERSION
+    command.run_id = run_id
+    return message

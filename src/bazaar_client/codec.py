@@ -5,7 +5,11 @@ This is the only place where bytes from the network become protobuf objects.
 Each WebSocket message carries exactly one protobuf message, with no JSON,
 Base64 or length prefix around it (the spec's "Connect your client").
 """
+from google.protobuf.message import DecodeError
+
 from generated import bazaar_pb2 as pb
+
+from bazaar_client.errors import ProtocolViolation
 
 
 def encode(message: pb.ClientMessage) -> bytes:
@@ -19,7 +23,10 @@ def encode(message: pb.ClientMessage) -> bytes:
     Never changes `message`. If a required field is missing, protobuf's own
     check raises google.protobuf.message.EncodeError.
     """
-    raise NotImplementedError("package D")
+    # SerializeToString() itself never mutates `message`, and it already
+    # raises EncodeError for us if a required field is missing -- there's
+    # nothing to add here.
+    return message.SerializeToString()
 
 
 def decode(frame: bytes) -> pb.ServerMessage:
@@ -37,4 +44,31 @@ def decode(frame: bytes) -> pb.ServerMessage:
     decode() must call IsInitialized() itself after parsing, and raise if it's
     False.
     """
-    raise NotImplementedError("package D")
+    # The spec never sends text frames. A str here means the connection layer
+    # handed us one anyway, so refuse it before it ever reaches the parser
+    # (which would otherwise try to encode it as UTF-8 bytes and confuse a
+    # text-frame bug for a protobuf bug).
+    if isinstance(frame, str):
+        raise ProtocolViolation("received a text frame; the spec only sends binary frames")
+
+    message = pb.ServerMessage()
+    try:
+        message.ParseFromString(frame)
+    except DecodeError as error:
+        raise ProtocolViolation(f"could not parse bytes as a ServerMessage: {error}") from error
+
+    # A ServerMessage with none of state/result/protocol_error/readiness set
+    # is still "initialized" as far as protobuf is concerned -- a proto2
+    # oneof member can't be declared `required`. So this check can't be
+    # folded into the IsInitialized() check below; it has to happen on its
+    # own.
+    if message.WhichOneof("message") is None:
+        raise ProtocolViolation(
+            "server message selects none of state, result, protocol_error or readiness"
+        )
+
+    if not message.IsInitialized():
+        missing = ", ".join(message.FindInitializationErrors())
+        raise ProtocolViolation(f"server message is missing required fields: {missing}")
+
+    return message
