@@ -13,23 +13,38 @@ def bundle(value):
 
 def validate_initial(state):
     require(state.self_station_id == "P01", "Expected station P01.")
-    require(bundle(getattr(state, "self").inventory) == (30, 30, 30), "Expected starting inventory (30, 30, 30).")
+    require(state.world_version in range(2, 9),
+            "Expected world version 2 through 8; this client supports steps 1 through 7.")
+    inventory = ((30, 30, 30) if state.world_version <= 5 else
+                 (28, 31, 30) if state.world_version <= 7 else (28, 31, 31))
+    require(bundle(getattr(state, "self").inventory) == inventory,
+            f"Expected inventory {inventory} at world version {state.world_version}.")
     require(getattr(state, "self").specialty == pb.RESOURCE_WATER, "Expected WATER specialty.")
     require(state.snapshot_sequence == 1, "Expected initial snapshot sequence 1.")
-    # Versions 3 and 4 are supported reconnect points after steps 2 and 3.
-    require(state.world_version in (2, 3, 4), "Expected starting world version 2 or a reconnect after step 2 or 3.")
     require(any(
         ad.station_id == "P02" and ad.status == pb.PUBLICATION_STATUS_ACTIVE
         and list(ad.selling.items) == [pb.RESOURCE_FOOD]
         and list(ad.seeking.items) == [pb.RESOURCE_WATER]
         for ad in state.advertisements.items
     ), "Expected P02's active food-for-water advertisement.")
+    if state.world_version >= 5:
+        validate_advertisement(state, [], [pb.RESOURCE_COMPONENTS])
+        offer_id = recover_offer_id(state)
+        if state.world_version == 5:
+            validate_offer(state, offer_id)
+        elif state.world_version in (6, 7):
+            validate_acceptance(state, offer_id)
+            if state.world_version == 7:
+                validate_gift(state)
+        else:
+            validate_completed(state)
 
 
-def validate_progress(state, version, sequence):
+
+def validate_progress(state, version, sequence, inventory=(30, 30, 30)):
     require(state.world_version == version, f"Expected world version {version}.")
     require(state.snapshot_sequence == sequence, f"Expected snapshot sequence {sequence}.")
-    require(bundle(getattr(state, "self").inventory) == (30, 30, 30), "Expected unchanged inventory (30, 30, 30).")
+    require(bundle(getattr(state, "self").inventory) == inventory, f"Expected inventory {inventory}.")
 
 
 def validate_advertisement(state, selling, seeking, object_id=None):
@@ -58,3 +73,76 @@ def validate_offer(state, offer_id):
             and bundle(offer.give) == (2, 0, 0) and bundle(offer.receive) == (0, 1, 0)
             and offer.expires_tick == 6 and offer.status == pb.OFFER_STATUS_OPEN,
             "Expected an open offer of two water for one food to P02.")
+
+
+def validate_acceptance(state, offer_id):
+    offers = [offer for offer in state.offers.items if offer.offer_id == offer_id]
+    require(len(offers) == 1 and offers[0].status == pb.OFFER_STATUS_ACCEPTED,
+            "Expected our offer to be accepted.")
+    transactions = state.transactions.items
+    require(len(transactions) == 1 and transactions[0].offer_id == offer_id,
+            "Expected exactly one transaction for our offer.")
+    require(bundle(getattr(state, "self").inventory) == (28, 31, 30),
+            "Expected inventory (28, 31, 30) after P02 accepted.")
+
+
+def validate_gift(state):
+    offers = [offer for offer in state.offers.items
+              if offer.proposer_id == "P02" and offer.recipient_id == "P01"
+              and offer.status == pb.OFFER_STATUS_OPEN
+              and bundle(offer.give) == (0, 0, 1)
+              and bundle(offer.receive) == (0, 0, 0)]
+    require(len(offers) == 1 and bool(offers[0].offer_id),
+            "Expected one open gift of one component from P02 to P01.")
+    require(bundle(getattr(state, "self").inventory) == (28, 31, 30),
+            "Expected inventory to remain (28, 31, 30) before accepting the gift.")
+    return offers[0].offer_id
+
+
+def validate_accept_result(result, run_id, request_id, offer_id):
+    require(validate_result(result, run_id, request_id) == offer_id,
+            "Acceptance result identifies a different offer.")
+    require(bool(result.transaction_id.value),
+            "Acceptance result is missing its transaction ID.")
+    return result.transaction_id.value
+
+
+def validate_gift_accepted(state, offer_id, transaction_id, advertisement_id):
+    require(bundle(getattr(state, "self").inventory) == (28, 31, 31),
+            "Expected inventory (28, 31, 31) after accepting the gift.")
+    offers = [offer for offer in state.offers.items if offer.offer_id == offer_id]
+    require(len(offers) == 1 and offers[0].status == pb.OFFER_STATUS_ACCEPTED
+            and offers[0].transaction_id.value == transaction_id,
+            "Expected the accepted gift linked to the result transaction.")
+    transactions = state.transactions.items
+    require(len(transactions) == 2, "Expected two transactions after accepting the gift.")
+    matches = [tx for tx in transactions if tx.transaction_id == transaction_id]
+    require(len(matches) == 1 and matches[0].offer_id == offer_id
+            and matches[0].proposer_id == "P02" and matches[0].recipient_id == "P01"
+            and bundle(matches[0].give) == (0, 0, 1)
+            and bundle(matches[0].receive) == (0, 0, 0),
+            "Expected the result transaction to transfer one component for free.")
+    validate_advertisement(state, [], [pb.RESOURCE_COMPONENTS], advertisement_id)
+
+
+def recover_offer_id(state):
+    offers = [offer for offer in state.offers.items
+              if offer.proposer_id == "P01" and offer.recipient_id == "P02"
+              and bundle(offer.give) == (2, 0, 0)
+              and bundle(offer.receive) == (0, 1, 0)]
+    require(len(offers) == 1 and bool(offers[0].offer_id),
+            "Expected our existing two-water-for-one-food offer.")
+    return offers[0].offer_id
+
+
+def validate_completed(state):
+    gifts = [offer for offer in state.offers.items
+             if offer.proposer_id == "P02" and offer.recipient_id == "P01"
+             and bundle(offer.give) == (0, 0, 1)
+             and bundle(offer.receive) == (0, 0, 0)
+             and offer.status == pb.OFFER_STATUS_ACCEPTED]
+    require(len(gifts) == 1 and bool(gifts[0].transaction_id.value),
+            "Expected the completed gift and its transaction.")
+    advertisement_id = validate_advertisement(state, [], [pb.RESOURCE_COMPONENTS])
+    validate_gift_accepted(state, gifts[0].offer_id,
+                           gifts[0].transaction_id.value, advertisement_id)

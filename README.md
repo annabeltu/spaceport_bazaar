@@ -18,7 +18,7 @@ Terminal 1 starts the matching ARM64 or x86-64 Linux server binary:
 bash scripts/start-server.sh
 ```
 
-Terminal 2 connects as P01 and completes practice steps 1 through 4:
+Terminal 2 connects as P01 and completes practice steps 1 through 7:
 
 ```sh
 .venv/bin/python client/connect.py
@@ -30,13 +30,17 @@ WebSocket URL `ws://127.0.0.1:3001/ws` reaches the server.
 
 The client validates the initial state, confirms readiness, publishes and replaces
 an advertisement, then offers P02 two water for one food. It checks each command's
-result and state before continuing, then prints server-pushed updates (including
-P02's acceptance and gift). It does not yet accept the gift.
+result and state before continuing, then validates P02's automatic acceptance
+and gift, including inventory and transaction checks. It prints the gift's
+`ZERO_PRICE_OFFER_ID`, then accepts the gift and validates the result and state.
+After confirming two transactions, inventory `(28,31,31)`, and the still-active
+components advertisement, it exits after step 7.
 
-You can reconnect after step 2 or 3 without restarting the server: the client
-validates the current listing and continues from the corresponding world version.
+You can reconnect through step 7 without restarting the server: the client
+validates the current state and recovers existing offer IDs before continuing.
 Snapshot sequences are checked relative to the connection's latest snapshot.
-Reconnects after step 4 are not yet supported.
+If the gift is already accepted at world version 8, the client confirms completion
+and exits without sending another trade command.
 
 Message construction lives in `client/messages.py`, binary transport in
 `client/connection.py`, and snapshot/result checks in `client/state.py`.

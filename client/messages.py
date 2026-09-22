@@ -37,3 +37,9 @@ def build_offer(run_id, request_id="student-offer-1"):
     command.body.receive.CopyFrom(pb.Bundle(water=0, food=1, components=0))
     command.body.expires_tick = 6
     return message
+
+
+def build_accept(run_id, offer_id, request_id="student-accept-1"):
+    message, command = _build("accept", pb.ACCEPT_TYPE_ACCEPT, run_id, request_id)
+    command.body.offer_id = offer_id
+    return message
