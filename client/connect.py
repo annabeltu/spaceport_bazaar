@@ -33,17 +33,21 @@ SUBPROTOCOL = "bazaar.protobuf.v2"
 # Step 1 setup: load P01 credentials for the authenticated WebSocket connection.
 def p01_token() -> str:
     try:
-        data = json.loads(CREDENTIALS.read_text())
-    except FileNotFoundError as error:
-        raise SystemExit(
-            f"Missing {CREDENTIALS.relative_to(ROOT)}. Start the server first."
-        ) from error
+        data = json.loads(CREDENTIALS.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise SystemExit("Missing credentials file. Start the server first.") from None
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise SystemExit("Cannot read credentials; expected a readable UTF-8 JSON file.") from None
+
+    if not isinstance(data, dict) or not isinstance(data.get("players"), list):
+        raise SystemExit("Expected a players list in the credentials file.")
 
     player = next(
-        (item for item in data.get("players", []) if item.get("station_id") == "P01"),
+        (item for item in data["players"]
+         if isinstance(item, dict) and item.get("station_id") == "P01"),
         None,
     )
-    if not player or not player.get("token"):
+    if not player or not isinstance(player.get("token"), str) or not player["token"]:
         raise SystemExit("The credentials file has no token for station P01.")
     return player["token"]
 

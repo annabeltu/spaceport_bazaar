@@ -18,6 +18,8 @@ def bundle(value):
 
 # Step 1: check the starting snapshot, including progress restored on reconnect.
 def validate_initial(state):
+    require(state.tick == 0 and state.phase == pb.PHASE_RUNNING,
+            "Expected running practice at tick 0.")
     require(state.self_station_id == "P01", "Expected station P01.")
     require(state.world_version in range(2, 10),
             "Expected world version 2 through 9; this client supports steps 1 through 8.")
@@ -51,6 +53,8 @@ def validate_initial(state):
 
 # Steps 2-8 and 10: check world version, snapshot sequence, and inventory.
 def validate_progress(state, version, sequence, inventory=(30, 30, 30)):
+    require(state.tick == 0 and state.phase == pb.PHASE_RUNNING,
+            "Expected running practice at tick 0.")
     require(state.world_version == version, f"Expected world version {version}.")
     require(state.snapshot_sequence == sequence, f"Expected snapshot sequence {sequence}.")
     require(bundle(getattr(state, "self").inventory) == inventory, f"Expected inventory {inventory}.")
