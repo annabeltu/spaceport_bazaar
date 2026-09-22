@@ -136,33 +136,61 @@ check "client and report both pass -> exit 0" 0 \
   "+client: passed" "+check_report: PASSED" "+report: passed" "+LIVE CHECK PASSED"
 
 # --- Interrupted part-way ------------------------------------------------------
-# Simulates `kill` (or closing the terminal) while the client is running.
-# The fake client touches a marker file so we know it has started, then
-# keeps "playing" for a few seconds.
-marker="$WORK/client-started"
-bash "$LIVE_CHECK" bash -c 'touch "$1"; sleep 3' fake-client "$marker" \
-  >"$WORK/interrupted.log" 2>&1 &
+# This fake client would keep "playing" for a whole minute, like a stuck
+# client. An interrupted live check must stop it (and the server) within
+# seconds instead of waiting for it. Its last argument is just a label, so
+# we can spot any copy that's still running.
+FAKE_CLIENT_LABEL="fake-stuck-client"
+STUCK_CLIENT=(python3 -c 'import time; time.sleep(60)' "$FAKE_CLIENT_LABEL")
+MAX_STOP_SECONDS=10
+
+# check_stopped_quickly <how it was interrupted> <seconds it took to stop>
+# Passes if the script ended within MAX_STOP_SECONDS and no fake client is
+# still running.
+check_stopped_quickly() {
+  local how="$1" seconds="$2" problem=""
+  [ "$seconds" -le "$MAX_STOP_SECONDS" ] || problem="took ${seconds}s, more than ${MAX_STOP_SECONDS}s"
+  if pgrep -f "$FAKE_CLIENT_LABEL" >/dev/null; then
+    problem="$problem; the fake client is still running"
+  fi
+  if [ -z "$problem" ]; then
+    echo "pass  ...and after $how it stopped the client too, within ${seconds}s"
+    passed=$((passed + 1))
+  else
+    echo "FAIL  after $how: ${problem#; }"
+    failed=$((failed + 1))
+  fi
+}
+
+# `kill` sends SIGTERM to the script alone. The client never receives it,
+# so the script has to stop the client itself.
+bash "$LIVE_CHECK" "${STUCK_CLIENT[@]}" >"$WORK/killed.log" 2>&1 &
 live_check_pid=$!
 for _ in $(seq 1 300); do   # wait up to 30 seconds for the client to start
-  [ -e "$marker" ] && break
+  grep -q "Running the client" "$WORK/killed.log" && break
   sleep 0.1
 done
+sleep 1   # give the fake client a moment to really be running
+started_at=$SECONDS
 kill -TERM "$live_check_pid"
 wait "$live_check_pid"
 exit_code=$?
-output="$(cat "$WORK/interrupted.log")"
+seconds=$((SECONDS - started_at))
+output="$(cat "$WORK/killed.log")"
 check "killed while the client runs -> exit 143, server stopped, temp folder deleted" 143 \
-  "+Started the practice server" "+Stopped the practice server" "-LIVE CHECK PASSED"
+  "+Started the practice server" "+Stopped the client" "+Stopped the practice server" \
+  "-LIVE CHECK PASSED"
+check_stopped_quickly "kill" "$seconds"
 
-# A real Ctrl+C comes from a terminal, which sends SIGINT to every program
-# running in it, the server included. Python's `pty` module gives the script
-# a pretend terminal, so we can "press" Ctrl+C by writing its byte (\x03).
-output="$(python3 - "$LIVE_CHECK" <<'PY'
+# A real Ctrl+C comes from a terminal, which sends SIGINT to the programs
+# running in it. Python's `pty` module gives the script a pretend terminal,
+# so we can "press" Ctrl+C by writing its byte (\x03).
+output="$(python3 - "$LIVE_CHECK" "${STUCK_CLIENT[@]}" <<'PY'
 import os, pty, select, sys, time
 
 pid, terminal = pty.fork()
 if pid == 0:  # the child process: run the live check in the pretend terminal
-    os.execvp("bash", ["bash", sys.argv[1], "bash", "-c", "sleep 30"])
+    os.execvp("bash", ["bash", *sys.argv[1:]])
 
 output = b""
 
@@ -178,17 +206,23 @@ def read_until(is_done, seconds):
                 return
 
 read_until(lambda: b"Running the client" in output, 30)
+time.sleep(1)  # give the fake client a moment to really be running
+pressed_at = time.time()
 os.write(terminal, b"\x03")  # Ctrl+C
-read_until(lambda: False, 30)  # read everything until the script ends
+read_until(lambda: False, 90)  # read everything until the script ends
 _, status = os.waitpid(pid, 0)
 # Terminals end lines with \r\n; turn them into plain \n for the checks.
 print(output.decode(errors="replace").replace("\r\n", "\n"))
+print(f"SECONDS_TO_STOP={round(time.time() - pressed_at)}")
 sys.exit(os.waitstatus_to_exitcode(status))
 PY
 )"
 exit_code=$?
+# (No "+Stopped the practice server" here: Ctrl+C reaches the server too,
+# and it may stop itself first. check() still proves it's gone.)
 check "Ctrl+C while the client runs -> exit 130, server stopped, temp folder deleted" 130 \
-  "+Started the practice server" "+Stopped the practice server" "-LIVE CHECK PASSED"
+  "+Started the practice server" "+Stopped the client" "-LIVE CHECK PASSED"
+check_stopped_quickly "Ctrl+C" "$(printf '%s\n' "$output" | sed -n 's/^SECONDS_TO_STOP=//p')"
 
 # --- Something else already on the port ------------------------------------------
 # If an old server were still running, the client would connect to IT with

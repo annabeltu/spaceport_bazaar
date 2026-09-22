@@ -16,9 +16,9 @@
 #        PYTHONPATH=src python -m bazaar_client --credentials <that file>
 #   5. Stops the server and runs check_report.py on its report.
 #
-# Whatever happens, even a failed step or Ctrl+C, it stops the server and
-# deletes the temp folder (see `cleanup` below). It exits 0 only if the
-# client AND the report both pass.
+# Whatever happens, even a failed step, `kill` or Ctrl+C, it stops the
+# client and the server and deletes the temp folder (see `cleanup` below).
+# It exits 0 only if the client AND the report both pass.
 #
 # To run a different client command, pass it as arguments. They replace
 # `python -m bazaar_client`, and `--credentials <file>` is always added at
@@ -45,6 +45,8 @@ SERVER_STOP_TIMEOUT_SECONDS=5
 # The practice exchange takes seconds. This only stops a stuck client from
 # hanging the script forever.
 CLIENT_TIMEOUT_SECONDS=120
+# How long a client gets to stop after being asked, before it's forced to.
+CLIENT_STOP_TIMEOUT_SECONDS=5
 TIMEOUT_EXIT_CODE=124  # what `timeout` exits with when time runs out
 
 if [ "$#" -gt 0 ]; then
@@ -99,6 +101,21 @@ fi
 
 WORK_DIR=""
 SERVER_PID=""
+CLIENT_PID=""   # only set while the client is running
+
+stop_client() {
+  # Nothing to do if the client isn't running.
+  if [ -z "$CLIENT_PID" ]; then
+    return 0
+  fi
+  # The client runs under `timeout`, which passes this SIGTERM on to it,
+  # and forces it with SIGKILL if it's still running
+  # CLIENT_STOP_TIMEOUT_SECONDS later (timeout's --kill-after option).
+  kill -TERM "$CLIENT_PID" 2>/dev/null || true
+  wait "$CLIENT_PID" 2>/dev/null || true
+  echo "Stopped the client."
+  CLIENT_PID=""
+}
 
 stop_server() {
   # Nothing to do if the server never started or was already stopped.
@@ -106,33 +123,44 @@ stop_server() {
     return 0
   fi
 
-  # SIGINT is what Ctrl+C sends, the stop the README describes. The server
-  # shuts down cleanly on it (checked 2026-09-21: exit code 0).
-  kill -INT "$SERVER_PID" 2>/dev/null || true
-  local waited_tenths=0
-  while kill -0 "$SERVER_PID" 2>/dev/null &&
-    [ "$waited_tenths" -lt $((SERVER_STOP_TIMEOUT_SECONDS * 10)) ]; do
-    sleep 0.1
-    waited_tenths=$((waited_tenths + 1))
-  done
-  # If it ignored that, force it. SIGKILL can't be ignored.
+  local message="Stopped the practice server (PID $SERVER_PID)."
   if kill -0 "$SERVER_PID" 2>/dev/null; then
-    echo "run_live_check: the server didn't stop within ${SERVER_STOP_TIMEOUT_SECONDS}s; forcing it." >&2
-    kill -KILL "$SERVER_PID" 2>/dev/null || true
+    # SIGINT is what Ctrl+C sends, the stop the README describes. The server
+    # shuts down cleanly on it (checked 2026-09-21: exit code 0).
+    kill -INT "$SERVER_PID" 2>/dev/null || true
+    local waited_tenths=0
+    while kill -0 "$SERVER_PID" 2>/dev/null &&
+      [ "$waited_tenths" -lt $((SERVER_STOP_TIMEOUT_SECONDS * 10)) ]; do
+      sleep 0.1
+      waited_tenths=$((waited_tenths + 1))
+    done
+    # If it ignored that, force it. SIGKILL can't be ignored.
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+      echo "run_live_check: the server didn't stop within ${SERVER_STOP_TIMEOUT_SECONDS}s; forcing it." >&2
+      kill -KILL "$SERVER_PID" 2>/dev/null || true
+    fi
+  else
+    message="The practice server (PID $SERVER_PID) had already stopped."
   fi
   # `wait` collects the stopped process, so no leftover entry stays in the
   # process table.
   wait "$SERVER_PID" 2>/dev/null || true
-  echo "Stopped the practice server (PID $SERVER_PID)."
+  echo "$message"
   SERVER_PID=""
 }
 
 # `trap cleanup EXIT` runs cleanup whenever this script ends: success, a
-# failed step (set -e), or a signal. That's how the server always stops.
+# failed step (set -e), or a signal. That's how the client and the server
+# always stop.
 cleanup() {
   local exit_code=$?
+  # A second Ctrl+C must not cut cleanup short and leave the server
+  # running, so ignore Ctrl+C and `kill` from here on. (Each step has its
+  # own time limit, so cleanup still ends within seconds.)
+  trap '' INT TERM
   # Every cleanup step must run, even if one of them fails.
   set +e
+  stop_client
   stop_server
   if [ -n "$WORK_DIR" ]; then
     rm -rf "$WORK_DIR"   # this deletes the credentials file, and its tokens
@@ -140,9 +168,12 @@ cleanup() {
   exit "$exit_code"
 }
 trap cleanup EXIT
-# Turn Ctrl+C (INT) and `kill` (TERM) into a normal exit, so the EXIT trap
-# above runs. The server needs this: bash starts background programs so
-# they IGNORE Ctrl+C from the terminal, so only cleanup can stop it.
+# Turn Ctrl+C (INT) and `kill` (TERM) into a normal exit with the usual
+# exit code, so the EXIT trap above is certain to run. We can't count on
+# the signal reaching the client or the server: `kill` only reaches this
+# script, and programs started with `&` from a script normally ignore
+# Ctrl+C. (This server happens to catch Ctrl+C anyway; stop_server copes
+# with finding it already stopped.)
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -169,12 +200,21 @@ echo "Started the practice server (PID $SERVER_PID) on $SERVER_HOST:$SERVER_PORT
 
 # --- 3. Wait until it's listening ---------------------------------------------
 
+# redact_tokens: copies its input, replacing anything shaped like a token
+# with [REDACTED]. The server's normal output never contains a token
+# (checked 2026-09-21), but a crash message is output nobody has checked,
+# so we don't take the chance. Tokens are 64 letters and digits; words and
+# file names in error messages are much shorter than 32 characters.
+redact_tokens() {
+  sed -E 's/[A-Za-z0-9._~+=-]{32,}/[REDACTED]/g'
+}
+
 wait_for_server() {
   local waited_tenths=0 listener
   while [ "$waited_tenths" -lt $((SERVER_START_TIMEOUT_SECONDS * 10)) ]; do
     if ! kill -0 "$SERVER_PID" 2>/dev/null; then
       echo "run_live_check: the server stopped during startup. Its output:" >&2
-      sed 's/^/  /' "$SERVER_LOG" >&2
+      redact_tokens <"$SERVER_LOG" | sed 's/^/  /' >&2
       return 1
     fi
     # Ready means OUR server (matched by its PID) is listening, and it has
@@ -200,15 +240,24 @@ fi
 echo "The server is listening."
 
 # --- 4. Run the client --------------------------------------------------------
+# The client runs in the background (`&`) and we `wait` for it. Why not just
+# run it normally? While a normal command runs, bash holds back a `kill` or
+# Ctrl+C until that command ends, so a stuck client would stop the script
+# from stopping. `wait` is interrupted straight away instead, and cleanup
+# then stops the client and the server.
+#
+# `timeout` stops a client that's still running after CLIENT_TIMEOUT_SECONDS.
 # `|| client_exit=$?` records a failure instead of stopping the script, so
 # we still check the report: it shows how far the client got.
-# `--foreground` keeps the client able to receive Ctrl+C.
 
 echo
 echo "== Running the client: ${CLIENT_COMMAND[*]} --credentials $CREDENTIALS_FILE"
+PYTHONPATH=src timeout --kill-after="$CLIENT_STOP_TIMEOUT_SECONDS" "$CLIENT_TIMEOUT_SECONDS" \
+  "${CLIENT_COMMAND[@]}" --credentials "$CREDENTIALS_FILE" &
+CLIENT_PID=$!
 client_exit=0
-PYTHONPATH=src timeout --foreground "$CLIENT_TIMEOUT_SECONDS" \
-  "${CLIENT_COMMAND[@]}" --credentials "$CREDENTIALS_FILE" || client_exit=$?
+wait "$CLIENT_PID" || client_exit=$?
+CLIENT_PID=""   # it has finished, so cleanup has nothing to stop
 
 # --- 5. Stop the server, then check its report ------------------------------------
 # Stopping first means the report can't change while we read it.

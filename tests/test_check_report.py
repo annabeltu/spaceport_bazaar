@@ -305,6 +305,18 @@ def test_json_that_is_not_an_object_gives_a_clear_error(tmp_path):
     assert_no_crash(result)
 
 
+def test_binary_file_gives_a_clear_error_without_echoing_its_bytes(tmp_path):
+    path = tmp_path / "validation-report.json"
+    path.write_bytes(b"\xff\xfe binary junk")
+
+    result = run_check(path)
+
+    assert result.returncode == EXIT_CANNOT_READ
+    assert "not UTF-8 text" in result.stderr
+    assert "0xff" not in result.stderr  # no piece of the file's contents
+    assert_no_crash(result)
+
+
 def test_a_folder_instead_of_a_file_gives_a_clear_error(tmp_path):
     result = run_check(tmp_path)
 
@@ -313,7 +325,7 @@ def test_a_folder_instead_of_a_file_gives_a_clear_error(tmp_path):
     assert_no_crash(result)
 
 
-def test_no_arguments_prints_usage(tmp_path):
+def test_no_arguments_prints_usage():
     result = run_check()
 
     assert result.returncode == EXIT_CANNOT_READ

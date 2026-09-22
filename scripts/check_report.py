@@ -63,7 +63,13 @@ def load_report(path: Path) -> dict:
         ) from None
     except IsADirectoryError:
         raise ReportUnreadable(f"{path} is a folder, not a report file.") from None
-    except (OSError, UnicodeDecodeError) as error:
+    except UnicodeDecodeError:
+        # Python's own message for this quotes a byte of the file, so we
+        # use a fixed message instead: nothing from the file gets printed.
+        raise ReportUnreadable(
+            f"{path} is not UTF-8 text, so it can't be a report."
+        ) from None
+    except OSError as error:
         raise ReportUnreadable(f"could not read {path}: {error}") from None
 
     try:
