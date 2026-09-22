@@ -1,16 +1,22 @@
 """Checks for the practice exercise's authoritative snapshots."""
+# Step numbers refer to starter/README.md, "Complete the exchange".
+# Each label applies to the entire function below it.
+
 from generated import bazaar_pb2 as pb
 
 
+# Shared by steps 1-10: stop when an expected condition is not met.
 def require(condition, description):
     if not condition:
         raise RuntimeError(description)
 
 
+# Shared state checks: read resource quantities as (water, food, components).
 def bundle(value):
     return value.water, value.food, value.components
 
 
+# Step 1: check the starting snapshot, including progress restored on reconnect.
 def validate_initial(state):
     require(state.self_station_id == "P01", "Expected station P01.")
     require(state.world_version in range(2, 10),
@@ -43,12 +49,14 @@ def validate_initial(state):
 
 
 
+# Steps 2-8 and 10: check world version, snapshot sequence, and inventory.
 def validate_progress(state, version, sequence, inventory=(30, 30, 30)):
     require(state.world_version == version, f"Expected world version {version}.")
     require(state.snapshot_sequence == sequence, f"Expected snapshot sequence {sequence}.")
     require(bundle(getattr(state, "self").inventory) == inventory, f"Expected inventory {inventory}.")
 
 
+# Steps 2-3 and 7, plus reconnect checks: verify the active advertisement.
 def validate_advertisement(state, selling, seeking, object_id=None):
     listings = [ad for ad in state.advertisements.items
                 if ad.station_id == state.self_station_id and ad.status == pb.PUBLICATION_STATUS_ACTIVE]
@@ -60,6 +68,7 @@ def validate_advertisement(state, selling, seeking, object_id=None):
     return ad.advertisement_id
 
 
+# Steps 2-4, 7-8, and 10: check successful command results and object IDs.
 def validate_result(result, run_id, request_id):
     require(result.run_id == run_id and result.request_id == request_id
             and result.ok and result.code == pb.RESULT_CODE_OK, f"Command failed or result did not match: {result}")
@@ -67,6 +76,7 @@ def validate_result(result, run_id, request_id):
     return result.object_id.value
 
 
+# Step 4: verify the open two-water-for-one-food offer.
 def validate_offer(state, offer_id):
     offers = [offer for offer in state.offers.items if offer.offer_id == offer_id]
     require(len(offers) == 1, "Expected the new offer in state.")
@@ -77,6 +87,7 @@ def validate_offer(state, offer_id):
             "Expected an open offer of two water for one food to P02.")
 
 
+# Step 5, rechecked in step 6: verify P02 accepted and the trade settled.
 def validate_acceptance(state, offer_id):
     offers = [offer for offer in state.offers.items if offer.offer_id == offer_id]
     require(len(offers) == 1 and offers[0].status == pb.OFFER_STATUS_ACCEPTED,
@@ -88,6 +99,7 @@ def validate_acceptance(state, offer_id):
             "Expected inventory (28, 31, 30) after P02 accepted.")
 
 
+# Step 6 and before step 7: find the free component offer and save its ID.
 def validate_gift(state):
     offers = [offer for offer in state.offers.items
               if offer.proposer_id == "P02" and offer.recipient_id == "P01"
@@ -101,6 +113,7 @@ def validate_gift(state):
     return offers[0].offer_id
 
 
+# Step 7: check the gift acceptance result and recover its transaction ID.
 def validate_accept_result(result, run_id, request_id, offer_id):
     require(validate_result(result, run_id, request_id) == offer_id,
             "Acceptance result identifies a different offer.")
@@ -109,6 +122,7 @@ def validate_accept_result(result, run_id, request_id, offer_id):
     return result.transaction_id.value
 
 
+# Step 7: verify the accepted gift, both transactions, and active advertisement.
 def validate_gift_accepted(state, offer_id, transaction_id, advertisement_id):
     require(bundle(getattr(state, "self").inventory) == (28, 31, 31),
             "Expected inventory (28, 31, 31) after accepting the gift.")
@@ -127,6 +141,7 @@ def validate_gift_accepted(state, offer_id, transaction_id, advertisement_id):
     validate_advertisement(state, [], [pb.RESOURCE_COMPONENTS], advertisement_id)
 
 
+# Reconnect support for steps 4-7: recover the existing offer instead of resending it.
 def recover_offer_id(state):
     offers = [offer for offer in state.offers.items
               if offer.proposer_id == "P01" and offer.recipient_id == "P02"
@@ -137,6 +152,7 @@ def recover_offer_id(state):
     return offers[0].offer_id
 
 
+# Reconnect after step 7: verify the completed gift before proceeding to step 8.
 def validate_completed(state):
     gifts = [offer for offer in state.offers.items
              if offer.proposer_id == "P02" and offer.recipient_id == "P01"
@@ -150,6 +166,7 @@ def validate_completed(state):
                            gifts[0].transaction_id.value, advertisement_id)
 
 
+# Steps 8 and 10, plus reconnect checks: verify removal and unchanged trades/inventory.
 def validate_withdrawn(state, advertisement_id=None, previous_transactions=None):
     require(not any(ad.station_id == "P01" or
                     (advertisement_id is not None and ad.advertisement_id == advertisement_id)
@@ -164,6 +181,7 @@ def validate_withdrawn(state, advertisement_id=None, previous_transactions=None)
                 "Withdrawal changed the transaction history.")
 
 
+# Step 9: verify the intentional request-limit error keeps the connection open.
 def validate_request_capacity_error(error, run_id, request_id):
     require(error.code == pb.CONTROL_CODE_REQUEST_CAPACITY_EXCEEDED,
             "Expected the intentional request-capacity error.")
@@ -172,6 +190,7 @@ def validate_request_capacity_error(error, run_id, request_id):
     require(not error.close_session, "Request-capacity error must leave the session open.")
 
 
+# Step 10: check final state, stored results, trade totals, and zero simulation counters.
 def validate_final(state, run_id, sequence, previous_transactions):
     require(state.run_id == run_id and state.self_station_id == "P01",
             "Final state belongs to another run or station.")

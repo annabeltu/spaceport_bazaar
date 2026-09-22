@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Connect to the practice server and complete practice steps 1 through 10."""
 
+# Step numbers in this file refer to starter/README.md, "Complete the exchange".
+
 from __future__ import annotations
 
 import asyncio
@@ -28,6 +30,7 @@ URI = "ws://127.0.0.1:3001/ws"
 SUBPROTOCOL = "bazaar.protobuf.v2"
 
 
+# Step 1 setup: load P01 credentials for the authenticated WebSocket connection.
 def p01_token() -> str:
     try:
         data = json.loads(CREDENTIALS.read_text())
@@ -45,6 +48,7 @@ def p01_token() -> str:
     return player["token"]
 
 
+# Reconnect support for steps 9-10: determine whether step 9 already completed.
 def capacity_error_observed(run_id):
     """The rejected request is not stored in snapshots; consult this server's report."""
     report_path = ROOT / "starter" / "validation-report.json"
@@ -61,7 +65,9 @@ def capacity_error_observed(run_id):
     return report.get("last_completed_step", 0) >= 9
 
 
+# Exercise steps 1-10, numbered below to match starter/README.md.
 async def main() -> None:
+    # Step 1: connect, read the starting state, and confirm readiness.
     async with connect(
         URI,
         additional_headers={"Authorization": f"Bearer {p01_token()}"},
@@ -99,11 +105,13 @@ async def main() -> None:
 
         if state.world_version < 9:
             # A reconnect supplies current progress; do not replay obsolete checks.
+            # Step 2: advertise water for food and check that inventory is unchanged.
             if state.world_version == 2:
                 object_id = await execute(build_advertisement(
                     run_id, "student-advertise-1", [pb.RESOURCE_WATER], [pb.RESOURCE_FOOD]), 3)
                 validate_advertisement(state, [pb.RESOURCE_WATER], [pb.RESOURCE_FOOD], object_id)
                 print("Step 2 confirmed: advertised water for food; inventory unchanged.", flush=True)
+            # Step 3: replace the advertisement with a components request; save its ID.
             if state.world_version == 3:
                 validate_advertisement(state, [pb.RESOURCE_WATER], [pb.RESOURCE_FOOD])
                 object_id = await execute(build_advertisement(
@@ -113,6 +121,7 @@ async def main() -> None:
             print(f"Step 3 confirmed: seeking components; ADVERTISEMENT_ID={advertisement_id}", flush=True)
 
             if state.world_version < 8:
+                # Step 4: send the trade offer, or recover its ID when reconnecting.
                 if state.world_version == 4:
                     offer_id = await execute(build_offer(run_id), 5)
                 else:
@@ -129,12 +138,15 @@ async def main() -> None:
                     validate_progress(update, version, state.snapshot_sequence + 1, (28, 31, 30))
                     validate_acceptance(update, offer_id)
                     state = update
+                    # Step 5: the acceptance and inventory checks above confirm the trade.
                     if version == 6:
                         print("Step 5 confirmed: P02 accepted; one transaction; inventory (28, 31, 30).", flush=True)
                     else:
+                        # Step 6: verify the gift and record ZERO_PRICE_OFFER_ID.
                         zero_price_offer_id = validate_gift(state)
                         print(f"Step 6 confirmed: P02 offered one component for free; ZERO_PRICE_OFFER_ID={zero_price_offer_id}", flush=True)
 
+                # Step 7: accept the gift and validate the result and updated state.
                 zero_price_offer_id = validate_gift(state)
                 command = build_accept(run_id, zero_price_offer_id)
                 await send(websocket, command)
@@ -150,6 +162,7 @@ async def main() -> None:
                 print(f"Step 7 confirmed: gift accepted; two transactions; inventory (28, 31, 31); seeking advertisement active; TRANSACTION_ID={transaction_id}", flush=True)
 
 
+            # Step 8: withdraw the advertisement and verify that trades remain unchanged.
             previous_transactions = pb.ListTransaction()
             previous_transactions.CopyFrom(state.transactions)
             object_id = await execute(build_withdraw(run_id, advertisement_id), 9, (28, 31, 31))
@@ -157,6 +170,7 @@ async def main() -> None:
             validate_withdrawn(state, advertisement_id, previous_transactions)
             print("Step 8 confirmed: advertisement removed; two transactions; inventory (28, 31, 31).", flush=True)
 
+        # Step 9: exceed request capacity and validate the expected protocol error.
         if not skip_capacity_request:
             # This rejected command yields only a protocol error, with no state update.
             request_id = "student-advertise-2"
@@ -167,6 +181,7 @@ async def main() -> None:
             print("Step 9 confirmed: request capacity exceeded as expected; connection remains open.", flush=True)
 
 
+        # Step 10: request and validate the final snapshot on the same connection.
         await send(websocket, build_sync(run_id))
         update = (await receive(websocket, "state")).state
         validate_final(update, run_id, state.snapshot_sequence + 1, state.transactions)
@@ -175,6 +190,7 @@ async def main() -> None:
 
 
 
+# Program entry point: run the complete exercise.
 if __name__ == "__main__":
     try:
         asyncio.run(main())
