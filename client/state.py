@@ -13,8 +13,8 @@ def bundle(value):
 
 def validate_initial(state):
     require(state.self_station_id == "P01", "Expected station P01.")
-    require(state.world_version in range(2, 9),
-            "Expected world version 2 through 8; this client supports steps 1 through 7.")
+    require(state.world_version in range(2, 10),
+            "Expected world version 2 through 9; this client supports steps 1 through 8.")
     inventory = ((30, 30, 30) if state.world_version <= 5 else
                  (28, 31, 30) if state.world_version <= 7 else (28, 31, 31))
     require(bundle(getattr(state, "self").inventory) == inventory,
@@ -27,7 +27,9 @@ def validate_initial(state):
         and list(ad.seeking.items) == [pb.RESOURCE_WATER]
         for ad in state.advertisements.items
     ), "Expected P02's active food-for-water advertisement.")
-    if state.world_version >= 5:
+    if state.world_version == 9:
+        validate_withdrawn(state)
+    elif state.world_version >= 5:
         validate_advertisement(state, [], [pb.RESOURCE_COMPONENTS])
         offer_id = recover_offer_id(state)
         if state.world_version == 5:
@@ -146,3 +148,53 @@ def validate_completed(state):
     advertisement_id = validate_advertisement(state, [], [pb.RESOURCE_COMPONENTS])
     validate_gift_accepted(state, gifts[0].offer_id,
                            gifts[0].transaction_id.value, advertisement_id)
+
+
+def validate_withdrawn(state, advertisement_id=None, previous_transactions=None):
+    require(not any(ad.station_id == "P01" or
+                    (advertisement_id is not None and ad.advertisement_id == advertisement_id)
+                    for ad in state.advertisements.items),
+            "Expected our advertisement to be absent after withdrawal.")
+    require(bundle(getattr(state, "self").inventory) == (28, 31, 31),
+            "Expected unchanged inventory (28, 31, 31) after withdrawal.")
+    require(len(state.transactions.items) == 2,
+            "Expected both completed transactions after withdrawal.")
+    if previous_transactions is not None:
+        require(state.transactions == previous_transactions,
+                "Withdrawal changed the transaction history.")
+
+
+def validate_request_capacity_error(error, run_id, request_id):
+    require(error.code == pb.CONTROL_CODE_REQUEST_CAPACITY_EXCEEDED,
+            "Expected the intentional request-capacity error.")
+    require(error.run_id.value == run_id and error.request_id.value == request_id,
+            "Request-capacity error belongs to another run or request.")
+    require(not error.close_session, "Request-capacity error must leave the session open.")
+
+
+def validate_final(state, run_id, sequence, previous_transactions):
+    require(state.run_id == run_id and state.self_station_id == "P01",
+            "Final state belongs to another run or station.")
+    validate_progress(state, 9, sequence, (28, 31, 31))
+    validate_withdrawn(state, previous_transactions=previous_transactions)
+    expected_requests = {
+        "student-advertise-1", "student-advertise-seeking-1",
+        "student-offer-1", "student-accept-1", "student-withdraw-1",
+    }
+    results = state.request_results.items
+    require(len(results) == 5 and {r.request_id for r in results} == expected_requests,
+            "Expected exactly the five successful stored requests, excluding the rejected request.")
+    for result in results:
+        validate_result(result, run_id, result.request_id)
+    station = getattr(state, "self")
+    require(bundle(station.imported_total) == (0, 1, 1)
+            and bundle(station.exported_total) == (2, 0, 0),
+            "Final import/export totals do not match the two trades.")
+    require(state.tick == 0, "Expected no simulation tick.")
+    for field in ("last_production", "last_unmet_upkeep", "produced_total",
+                  "consumed_total", "unmet_total"):
+        require(bundle(getattr(station, field)) == (0, 0, 0),
+                f"Expected zero {field}.")
+    for field in ("fully_supplied_ticks", "shortage_ticks",
+                  "current_shortage_streak", "longest_shortage_streak"):
+        require(getattr(station, field) == 0, f"Expected zero {field}.")

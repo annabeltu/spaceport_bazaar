@@ -319,9 +319,10 @@ def test_gift_settlement_rejects_invalid_state(settled_gift, change):
         validate_gift_accepted(state, 'gift-1', 'tx-2', 'ad-1')
 
 
-@pytest.mark.parametrize('version', [5, 6, 7, 8])
+@pytest.mark.parametrize('version,capacity_observed', [(5, False), (6, False), (7, False),
+                                                     (8, False), (9, False), (9, True)])
 def test_reconnect_resumes_without_replaying_commands(
-        settled_gift, monkeypatch, version):
+        settled_gift, monkeypatch, version, capacity_observed):
     import asyncio
     from copy import deepcopy
     from types import SimpleNamespace
@@ -337,7 +338,7 @@ def test_reconnect_resumes_without_replaying_commands(
     original.give.CopyFrom(pb.Bundle(water=2, food=0, components=0))
     original.receive.CopyFrom(pb.Bundle(water=0, food=1, components=0))
     snapshots = {}
-    for stage in range(version, 9):
+    for stage in range(version, 10):
         state = deepcopy(completed)
         state.world_version = stage
         state.snapshot_sequence = stage - version + 1
@@ -353,6 +354,8 @@ def test_reconnect_resumes_without_replaying_commands(
             state.transactions.ClearField('items')
             getattr(state, 'self').inventory.CopyFrom(
                 pb.Bundle(water=30, food=30, components=30))
+        if stage == 9:
+            del state.advertisements.items[1:]
         snapshots[stage] = state
 
     replies = [('state', snapshots[version]),
@@ -365,7 +368,23 @@ def test_reconnect_resumes_without_replaying_commands(
         result.object_id.value = 'gift-1'
         result.transaction_id.value = 'tx-2'
         replies.extend([('result', result), ('state', snapshots[8])])
+    if version < 9:
+        result = pb.Result(run_id='test-run', request_id='student-withdraw-1',
+                           ok=True, code=pb.RESULT_CODE_OK)
+        result.object_id.value = 'ad-1'
+        replies.extend([('result', result), ('state', snapshots[9])])
+    error = pb.ProtocolError(code=pb.CONTROL_CODE_REQUEST_CAPACITY_EXCEEDED,
+                             close_session=False)
+    error.run_id.value = 'test-run'
+    error.request_id.value = 'student-advertise-2'
+    if not capacity_observed:
+        replies.append(('protocol_error', error))
+    final = deepcopy(snapshots[9])
+    final.snapshot_sequence += 1
+    populate_final(final)
+    replies.append(('state', final))
     sent = []
+
 
     class Connection:
         subprotocol = client.SUBPROTOCOL
@@ -374,7 +393,8 @@ def test_reconnect_resumes_without_replaying_commands(
             return self
 
         async def __aexit__(self, *args):
-            pass
+            assert not replies
+
 
     async def receive(websocket, expected=None):
         kind, payload = replies.pop(0)
@@ -386,11 +406,161 @@ def test_reconnect_resumes_without_replaying_commands(
 
     monkeypatch.setattr(client, 'connect', lambda *args, **kwargs: Connection())
     monkeypatch.setattr(client, 'p01_token', lambda: 'test-token')
+    monkeypatch.setattr(client, 'capacity_error_observed', lambda run_id: capacity_observed)
     monkeypatch.setattr(client, 'receive', receive)
     monkeypatch.setattr(client, 'send', send)
     asyncio.run(client.main())
     assert not replies
     assert [message.WhichOneof('message') for message in sent] == (
-        ['ready'] if version == 8 else ['ready', 'accept'])
+        ['ready', 'sync'] if capacity_observed else
+        ['ready', 'advertise', 'sync'] if version == 9 else
+        ['ready', 'withdraw', 'advertise', 'sync'] if version == 8 else
+        ['ready', 'accept', 'withdraw', 'advertise', 'sync'])
+    if not capacity_observed:
+        assert sent[-2].advertise.request_id == 'student-advertise-2'
     if version < 8:
         assert sent[1].accept.body.offer_id == 'gift-1'
+
+
+
+def test_withdraw_serialization():
+    from client.messages import build_withdraw
+    command = roundtrip(build_withdraw('test-run', 'ad-1')).withdraw
+    assert command.type == pb.WITHDRAW_TYPE_WITHDRAW
+    assert (command.protocol_version, command.run_id, command.request_id) == (
+        '2.0', 'test-run', 'student-withdraw-1')
+    assert command.body.object_id == 'ad-1'
+
+
+@pytest.mark.parametrize('change', ['none', 'advertisement', 'inventory', 'transaction'])
+def test_withdrawal_state(settled_gift, change):
+    from copy import deepcopy
+    from client.state import validate_withdrawn
+    previous = deepcopy(settled_gift.transactions)
+    if change != 'advertisement':
+        del settled_gift.advertisements.items[1:]
+    if change == 'inventory':
+        getattr(settled_gift, 'self').inventory.components = 30
+    if change == 'transaction':
+        settled_gift.transactions.items[1].transaction_id = 'different'
+    if change == 'none':
+        validate_withdrawn(settled_gift, 'ad-1', previous)
+    else:
+        with pytest.raises(RuntimeError):
+            validate_withdrawn(settled_gift, 'ad-1', previous)
+
+
+
+@pytest.mark.parametrize('change', ['none', 'code', 'run', 'request', 'missing_request', 'close'])
+def test_request_capacity_error(change):
+    from client.state import validate_request_capacity_error
+    error = pb.ProtocolError(code=pb.CONTROL_CODE_REQUEST_CAPACITY_EXCEEDED,
+                             close_session=False)
+    error.run_id.value = 'test-run'
+    error.request_id.value = 'student-advertise-2'
+    if change == 'code':
+        # A different valid control code must not count as the expected failure.
+        codes = pb.ControlCode.values()
+        error.code = next(code for code in codes
+                          if code != pb.CONTROL_CODE_REQUEST_CAPACITY_EXCEEDED)
+    elif change == 'run':
+        error.run_id.value = 'other'
+    elif change == 'request':
+        error.request_id.value = 'other'
+    elif change == 'missing_request':
+        error.request_id.ClearField('value')
+    elif change == 'close':
+        error.close_session = True
+    if change == 'none':
+        validate_request_capacity_error(error, 'test-run', 'student-advertise-2')
+    else:
+        with pytest.raises(RuntimeError):
+            validate_request_capacity_error(error, 'test-run', 'student-advertise-2')
+
+
+
+def populate_final(state):
+    state.run_id = 'test-run'
+    station = getattr(state, 'self')
+    station.imported_total.CopyFrom(pb.Bundle(water=0, food=1, components=1))
+    station.exported_total.CopyFrom(pb.Bundle(water=2, food=0, components=0))
+    for request in ('advertise-1', 'advertise-seeking-1', 'offer-1', 'accept-1', 'withdraw-1'):
+        result = state.request_results.items.add(
+            run_id='test-run', request_id='student-' + request,
+            ok=True, code=pb.RESULT_CODE_OK)
+        result.object_id.value = 'object-' + request
+
+
+def test_sync_serialization():
+    from client.messages import build_sync
+    command = roundtrip(build_sync('test-run')).sync
+    assert command.type == pb.SYNC_TYPE_SYNC
+    assert command.protocol_version == '2.0'
+    assert command.run_id == 'test-run'
+    assert {field.name for field, _ in command.ListFields()} == {
+        'type', 'protocol_version', 'run_id'}
+
+
+@pytest.mark.parametrize('change', ['none', 'version', 'sequence', 'inventory', 'results',
+                                    'rejected_request', 'imports', 'exports', 'tick',
+                                    'production', 'consumption', 'shortage'])
+def test_final_state(settled_gift, change):
+    from copy import deepcopy
+    from client.state import validate_final
+    state = settled_gift
+    state.world_version = 9
+    state.snapshot_sequence = 9
+    del state.advertisements.items[1:]
+    populate_final(state)
+    previous = deepcopy(state.transactions)
+    station = getattr(state, 'self')
+    if change == 'version':
+        state.world_version = 10
+    elif change == 'sequence':
+        state.snapshot_sequence = 8
+    elif change == 'inventory':
+        station.inventory.water = 29
+    elif change == 'results':
+        del state.request_results.items[-1]
+    elif change == 'rejected_request':
+        state.request_results.items[-1].request_id = 'student-advertise-2'
+    elif change == 'imports':
+        station.imported_total.food = 0
+    elif change == 'exports':
+        station.exported_total.water = 0
+    elif change == 'tick':
+        state.tick = 1
+    elif change == 'production':
+        station.produced_total.water = 1
+    elif change == 'consumption':
+        station.consumed_total.food = 1
+    elif change == 'shortage':
+        station.shortage_ticks = 1
+    if change == 'none':
+        validate_final(state, 'test-run', 9, previous)
+    else:
+        with pytest.raises(RuntimeError):
+            validate_final(state, 'test-run', 9, previous)
+
+
+
+@pytest.mark.parametrize('step,observed', [(8, False), (9, True), (10, True)])
+def test_capacity_progress_from_report(tmp_path, monkeypatch, step, observed):
+    import json
+    import client.connect as client
+    (tmp_path / 'starter').mkdir()
+    (tmp_path / 'starter' / 'validation-report.json').write_text(json.dumps({
+        'run_id': 'run', 'status': 'in progress', 'last_completed_step': step}))
+    monkeypatch.setattr(client, 'ROOT', tmp_path)
+    assert client.capacity_error_observed('run') is observed
+
+
+def test_mismatched_scenario_requires_restart(tmp_path, monkeypatch):
+    import json
+    import client.connect as client
+    (tmp_path / 'starter').mkdir()
+    (tmp_path / 'starter' / 'validation-report.json').write_text(json.dumps({
+        'run_id': 'run', 'status': 'scenario mismatch', 'last_completed_step': 9}))
+    monkeypatch.setattr(client, 'ROOT', tmp_path)
+    with pytest.raises(RuntimeError, match='Restart the practice server'):
+        client.capacity_error_observed('run')

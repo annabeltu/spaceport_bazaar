@@ -43,3 +43,14 @@ def build_accept(run_id, offer_id, request_id="student-accept-1"):
     message, command = _build("accept", pb.ACCEPT_TYPE_ACCEPT, run_id, request_id)
     command.body.offer_id = offer_id
     return message
+
+
+def build_withdraw(run_id, object_id, request_id="student-withdraw-1"):
+    message, command = _build("withdraw", pb.WITHDRAW_TYPE_WITHDRAW, run_id, request_id)
+    command.body.object_id = object_id
+    return message
+
+
+def build_sync(run_id):
+    message, _ = _build("sync", pb.SYNC_TYPE_SYNC, run_id)
+    return message

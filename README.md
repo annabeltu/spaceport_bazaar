@@ -18,7 +18,7 @@ Terminal 1 starts the matching ARM64 or x86-64 Linux server binary:
 bash scripts/start-server.sh
 ```
 
-Terminal 2 connects as P01 and completes practice steps 1 through 7:
+Terminal 2 connects as P01 and completes practice steps 1 through 10:
 
 ```sh
 .venv/bin/python client/connect.py
@@ -34,13 +34,24 @@ result and state before continuing, then validates P02's automatic acceptance
 and gift, including inventory and transaction checks. It prints the gift's
 `ZERO_PRICE_OFFER_ID`, then accepts the gift and validates the result and state.
 After confirming two transactions, inventory `(28,31,31)`, and the still-active
-components advertisement, it exits after step 7.
+components advertisement, it withdraws the advertisement and checks that inventory and both transactions
+remain unchanged. It then sends `student-advertise-2` and checks the intentional
+request-capacity protocol error. No result or state is expected for that request.
+On the same connection, it sends sync and validates the final state, including
+five stored results, trade totals, and zero simulation counters, then exits.
+A fresh uninterrupted run sends 8 messages and receives 16; reconnects change
+these counts and restart snapshot sequences. The server report in
+`starter/validation-report.json` should show `sample exchange completed`,
+`last_completed_step: 10`, and final inventory `(28,31,31)`.
 
-You can reconnect through step 7 without restarting the server: the client
+You can reconnect through step 8 without restarting the server: the client
 validates the current state and recovers existing offer IDs before continuing.
 Snapshot sequences are checked relative to the connection's latest snapshot.
-If the gift is already accepted at world version 8, the client confirms completion
-and exits without sending another trade command.
+At world version 8 the client proceeds directly to withdrawal. At version 9 it
+checks the matching local validation report: after step 8 it sends the capacity
+request; after step 9 it proceeds directly to sync. The rejected request is not
+stored in state, and world version 9 alone cannot distinguish these stages.
+A run marked `scenario mismatch` must be restarted.
 
 Message construction lives in `client/messages.py`, binary transport in
 `client/connection.py`, and snapshot/result checks in `client/state.py`.
