@@ -64,7 +64,8 @@ def test_decode_rejects_malformed_bytes():
 
 @pytest.fixture
 def initial():
-    state = pb.State(self_station_id='P01', world_version=2, snapshot_sequence=1)
+    state = pb.State(self_station_id='P01', world_version=2, snapshot_sequence=1,
+                     phase=pb.PHASE_RUNNING)
     station = getattr(state, 'self')
     station.inventory.CopyFrom(pb.Bundle(water=30, food=30, components=30))
     station.specialty = pb.RESOURCE_WATER
@@ -78,6 +79,16 @@ def test_initial_and_supported_reconnects(initial):
     for version in (2, 3, 4):
         initial.world_version = version
         validate_initial(initial)
+
+
+@pytest.mark.parametrize('field,value', [('tick', 1), ('phase', pb.PHASE_PAUSED)])
+def test_every_snapshot_requires_running_practice_at_tick_zero(initial, field, value):
+    from client.state import validate_progress
+    setattr(initial, field, value)
+    with pytest.raises(RuntimeError, match='tick 0'):
+        validate_initial(initial)
+    with pytest.raises(RuntimeError, match='tick 0'):
+        validate_progress(initial, 2, 1)
 
 
 @pytest.mark.parametrize('field,value', [
