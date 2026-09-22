@@ -17,7 +17,7 @@ from types import MappingProxyType
 import pytest
 
 from bazaar_client.errors import GuardError
-from bazaar_client.guards import check
+from bazaar_client.guards import _string_fields, check
 from bazaar_client.models import MAX_UINT64, Amounts, GuardContext
 from generated import bazaar_pb2 as pb
 from spec import SPEC_MAX_COMMAND_BYTES, TEST_PLACEHOLDER_VALUES, load_spec_message
@@ -212,6 +212,14 @@ def test_check6_allows_a_message_within_the_context_size_limit():
     assert check(message, _context(max_command_bytes=SPEC_MAX_COMMAND_BYTES))
 
 
+def test_check6_allows_a_message_exactly_at_the_size_limit():
+    # The check is "> limit", so a message that lands exactly on the limit
+    # must still be allowed -- this pins down that boundary.
+    message = load_spec_message("10_sync.textproto")
+    exact_limit = len(message.SerializeToString())
+    assert check(message, _context(max_command_bytes=exact_limit))
+
+
 # --- Check 7: trading commands wait for readiness --------------------------------
 
 
@@ -290,6 +298,13 @@ def test_gap_empty_run_id_is_blocked():
 
 
 def test_gap_leftover_placeholder_is_blocked():
+    # Mirrors the exact gap from test_protobuf_safety_net.py: run_id left as
+    # the literal text "<RUN_ID>". No match= here on purpose: check 4a (run_id
+    # equality) runs before check 4b (the placeholder scan) and "<RUN_ID>"
+    # is also simply the wrong run_id, so check 4a is what actually fires --
+    # this test only proves the gap is blocked, not which check does it.
+    # test_check4b_blocks_a_placeholder_left_in_a_field_other_than_run_id
+    # above isolates check 4b itself, using a field other than run_id.
     message = load_spec_message("10_sync.textproto")
     message.sync.run_id = "<RUN_ID>"
     with pytest.raises(GuardError):
@@ -318,3 +333,20 @@ def test_gap_offering_more_than_you_own_is_blocked():
     message.offer.body.give.water = MAX_UINT64
     with pytest.raises(GuardError, match="water"):
         check(message, _context())
+
+
+# --- _string_fields(): the helper the placeholder scan (check 4b) relies on ----
+
+
+def test_string_fields_recurses_into_a_repeated_sub_message():
+    # No field reachable from ClientMessage is a repeated sub-message today,
+    # so check 4b's own tests above can't exercise this path. pb.DirectoryEntry
+    # (unrelated to ClientMessage) does have one, so this proves the helper
+    # itself is correct in general -- not just for today's schema -- and
+    # would still find a placeholder even if a future command grows a
+    # repeated body.
+    directory = pb.ListDirectoryEntry()
+    directory.items.add(station_id="P01", display_name="ok")
+    directory.items.add(station_id="<RUN_ID>", display_name="ok")
+    found = list(_string_fields(directory))
+    assert (("items", "station_id"), "<RUN_ID>") in found

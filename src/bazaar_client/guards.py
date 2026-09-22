@@ -160,19 +160,30 @@ def _check_no_placeholders(message: pb.ClientMessage) -> None:
 def _string_fields(message, prefix=()):
     """Yield (path, value) for every string field set inside `message`.
 
-    Walks into sub-messages that are present, so nested strings like
-    offer.body.recipient_id are found too. Mirrors required_field_paths() in
+    Walks into every sub-message that's present -- including each item of a
+    repeated sub-message field -- so nested strings like
+    offer.body.recipient_id are found too. No field in the current schema is
+    a repeated string or a repeated sub-message reachable from a
+    ClientMessage, but this handles both anyway: a future schema change
+    (e.g. a repeated body) should never silently stop being scanned for
+    placeholders. Mirrors required_field_paths() in
     tests/test_protobuf_safety_net.py, which walks the same tree for a
     different reason (finding required fields instead of string values).
     """
     for field in message.DESCRIPTOR.fields:
         path = (*prefix, field.name)
-        is_single_sub_message = field.message_type is not None and not field.is_repeated
-        if is_single_sub_message:
-            if message.HasField(field.name):
-                yield from _string_fields(getattr(message, field.name), path)
+        value = getattr(message, field.name)
+        if field.message_type is not None:
+            if field.is_repeated:
+                for item in value:
+                    yield from _string_fields(item, path)
+            elif message.HasField(field.name):
+                yield from _string_fields(value, path)
         elif field.type == FieldDescriptor.TYPE_STRING:
-            yield path, getattr(message, field.name)
+            if field.is_repeated:
+                yield from ((path, item) for item in value)
+            else:
+                yield path, value
 
 
 # --- Check 5: request_id is 1-64 letters, digits, "_" or "-" ---------------------
