@@ -63,6 +63,16 @@ def test_live_marker_is_registered(pytestconfig):
     assert any(line.startswith("live:") for line in markers)
 
 
+def test_live_tests_are_skipped_unless_asked_for(pytestconfig):
+    # A plain `pytest` stays fast because pyproject.toml's addopts deselect
+    # live tests. `pytest -m live` still runs them (checked by hand in the
+    # container): with two -m options pytest uses the last one, and the
+    # command line comes after addopts.
+    addopts = pytestconfig.getini("addopts")
+    assert "-m" in addopts, "pyproject.toml's addopts should deselect live tests"
+    assert addopts[addopts.index("-m") + 1] == "not live"
+
+
 # --- models.py ------------------------------------------------------------------
 
 
