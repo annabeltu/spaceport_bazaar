@@ -268,36 +268,34 @@ def make_transaction(
 
 
 def _placeholder_rules():
-    """The server's `rules`. Only two of the values come from the spec."""
+    """The server's public rules, recorded from a fresh passing run."""
     rules = pb.PublicRules()
     rules.max_command_bytes = SPEC_MAX_COMMAND_BYTES  # "within 16,384 bytes"
     rules.max_request_records_per_station = MAX_STORED_RESULTS
 
-    # PLACEHOLDERS: the spec doesn't give the rest. Package K replaces them with
-    # the values recorded from the real server.
-    rules.rules_version = "placeholder"
-    rules.duration_ticks = PLACEHOLDER_NUMBER
-    rules.tick_duration_ms = PLACEHOLDER_NUMBER
+    rules.rules_version = "2.0"
+    rules.duration_ticks = 12
+    rules.tick_duration_ms = 10_000
     # The order the spec writes bundles in, "(water, food, components)".
     _set_resources(
         rules.resource_order,
         (pb.RESOURCE_WATER, pb.RESOURCE_FOOD, pb.RESOURCE_COMPONENTS),
     )
-    rules.max_health = PLACEHOLDER_NUMBER
-    rules.shortage_damage_per_unit = PLACEHOLDER_NUMBER
-    rules.recovery_per_fully_supplied_tick = PLACEHOLDER_NUMBER
-    rules.max_publication_ttl_ticks = PLACEHOLDER_NUMBER
-    rules.max_offer_ttl_ticks = PLACEHOLDER_NUMBER
-    rules.new_commands_per_station_per_tick = PLACEHOLDER_NUMBER
-    rules.max_open_outgoing_offers = PLACEHOLDER_NUMBER
+    rules.max_health = 100
+    rules.shortage_damage_per_unit = 5
+    rules.recovery_per_fully_supplied_tick = 5
+    rules.max_publication_ttl_ticks = 12
+    rules.max_offer_ttl_ticks = 12
+    rules.new_commands_per_station_per_tick = 10
+    rules.max_open_outgoing_offers = 24
     return rules
 
 
 def _directory_entries():
-    """The exercise's two stations. Their display names are placeholders."""
+    """The exercise's two stations, as recorded from the practice server."""
     return [
-        pb.DirectoryEntry(station_id=OUR_STATION_ID, display_name="placeholder P01"),
-        pb.DirectoryEntry(station_id=PEER_STATION_ID, display_name="placeholder P02"),
+        pb.DirectoryEntry(station_id=OUR_STATION_ID, display_name="Station P01"),
+        pb.DirectoryEntry(station_id=PEER_STATION_ID, display_name="Station P02"),
     ]
 
 
@@ -307,7 +305,7 @@ def _our_station(inventory, imported_total, exported_total):
     station = pb.StationObservation()
     station.station_id = OUR_STATION_ID
     station.inventory.CopyFrom(inventory.to_bundle())
-    station.health = PLACEHOLDER_NUMBER
+    station.health = 100
     station.failed_once = False
     station.first_failure_tick.null = True  # it has never failed
     station.last_production.CopyFrom(NO_RESOURCES.to_bundle())
@@ -321,7 +319,7 @@ def _our_station(inventory, imported_total, exported_total):
     station.unmet_total.CopyFrom(NO_RESOURCES.to_bundle())
     station.imported_total.CopyFrom(imported_total.to_bundle())
     station.exported_total.CopyFrom(exported_total.to_bundle())
-    upkeep = Amounts(PLACEHOLDER_NUMBER, PLACEHOLDER_NUMBER, PLACEHOLDER_NUMBER)
+    upkeep = Amounts(1, 1, 1)
     station.upkeep_per_tick.CopyFrom(upkeep.to_bundle())
     station.specialty = pb.RESOURCE_WATER  # step 1: "self.specialty is RESOURCE_WATER"
     return station
@@ -334,7 +332,7 @@ def _p02_step_1_advertisement():
         station_id=PEER_STATION_ID,
         selling=(pb.RESOURCE_FOOD,),
         seeking=(pb.RESOURCE_WATER,),
-        expires_tick=PLACEHOLDER_NUMBER,
+        expires_tick=6,
     )
 
 
