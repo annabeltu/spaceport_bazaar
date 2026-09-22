@@ -4,8 +4,21 @@ The main read loop (contract and RunOptions by package A, run() by package I).
 This is the only module that ties everything together: connection, codec,
 state, engine, guards and logs.
 """
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+
+from google.protobuf import text_format
+
+from bazaar_client import codec, connection, engine, guards, logs, state
+from bazaar_client.credentials import load_credentials
+from bazaar_client.errors import (
+    ConnectionFailed,
+    ConnectionLost,
+    CredentialsError,
+    GuardError,
+    ProtocolViolation,
+)
 
 
 @dataclass(frozen=True)
@@ -55,4 +68,73 @@ async def run(options: RunOptions) -> int:
     - With options.dry_run it prints the first message it would send, in
       readable text, and sends nothing.
     """
-    raise NotImplementedError("package I")
+    websocket = None
+    logger = logs.setup_logging(options.log_file, None)
+    try:
+        credentials = load_credentials(options.credentials_path, "P01")
+        logger = logs.setup_logging(options.log_file, credentials.token)
+        client = state.initial()
+        position = engine.first_position()
+        websocket = await connection.connect(options.url, credentials)
+        reconnects = 0
+
+        while True:
+            try:
+                frame = await websocket.receive()
+            except ConnectionLost:
+                await websocket.close()
+                if reconnects >= 3:
+                    raise ConnectionLost("Connection was lost after 3 reconnect attempts.")
+                reconnects += 1
+                logger.warning("Connection lost; reconnecting (%d/3).", reconnects)
+                await asyncio.sleep(0)
+                client = state.on_new_connection(client)
+                websocket = await connection.connect(options.url, credentials)
+                continue
+
+            message = codec.decode(frame)
+            logs.log_received(logger, message)
+            client = state.apply_server_message(client, message)
+            position, decision = engine.decide(client, position, message)
+
+            if isinstance(decision, engine.Wait):
+                continue
+            if isinstance(decision, engine.Stop):
+                logger.error("STOP %s", decision.reason)
+                await websocket.close()
+                return 1
+            if isinstance(decision, engine.Finish):
+                logger.info("FINISH %s", decision.summary)
+                await websocket.close()
+                return 0
+
+            outgoing = decision.message
+            if options.dry_run:
+                rendered = text_format.MessageToString(
+                    outgoing, as_utf8=True, as_one_line=True
+                )
+                logger.info("DRY RUN would send %s", rendered)
+                await websocket.close()
+                return 0
+
+            data = guards.check(outgoing, state.guard_context(client))
+            await websocket.send(data)
+            logs.log_sent(logger, outgoing)
+            kind = outgoing.WhichOneof("message")
+            command = getattr(outgoing, kind)
+            if kind == "ready":
+                client = state.record_ready(client, command.snapshot_sequence)
+            elif kind != "sync":
+                client = state.record_sent(client, command.request_id, data)
+
+    except (
+        ConnectionFailed,
+        ConnectionLost,
+        CredentialsError,
+        GuardError,
+        ProtocolViolation,
+    ) as error:
+        logger.error("STOP %s", error)
+        if websocket is not None:
+            await websocket.close()
+        return 1

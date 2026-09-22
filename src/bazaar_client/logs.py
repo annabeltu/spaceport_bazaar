@@ -10,7 +10,10 @@ a backstop in case something ever tries to log it.
 """
 import logging
 from pathlib import Path
+import re
+import sys
 
+from google.protobuf import text_format
 from generated import bazaar_pb2 as pb
 
 # The name of the client's logger: logging.getLogger(LOGGER_NAME).
@@ -32,7 +35,22 @@ def redact(text: str, token: str | None) -> str:
     "Bearer " rule applies. (Careful: never call text.replace("", ...). An
     empty string matches between every pair of characters.)
     """
-    raise NotImplementedError("package I")
+    if token:
+        text = text.replace(token, REDACTED)
+    return re.sub(r"(?i)(Bearer\s+)\S+", rf"\1{REDACTED}", text)
+
+
+class _RedactingFilter(logging.Filter):
+    """Render a record once, redact it, then prevent args being applied again."""
+
+    def __init__(self, token: str | None) -> None:
+        super().__init__()
+        self._token = token
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = redact(record.getMessage(), self._token)
+        record.args = ()
+        return True
 
 
 def setup_logging(log_file: Path | None, token: str | None) -> logging.Logger:
@@ -46,16 +64,35 @@ def setup_logging(log_file: Path | None, token: str | None) -> logging.Logger:
     Calling it again replaces the handlers from the earlier call, so tests
     that call it many times don't get every line twice.
     """
-    raise NotImplementedError("package I")
+    logger = logging.getLogger(LOGGER_NAME)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
+
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    if log_file is not None:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+    for handler in handlers:
+        handler.setFormatter(formatter)
+        handler.addFilter(_RedactingFilter(token))
+        logger.addHandler(handler)
+    return logger
 
 
 def log_sent(logger: logging.Logger, message: pb.ClientMessage) -> None:
     """Log one line for a message we sent: SENT_LABEL, then the message in
     one-line protobuf text form."""
-    raise NotImplementedError("package I")
+    rendered = text_format.MessageToString(message, as_utf8=True, as_one_line=True)
+    logger.info("%s %s", SENT_LABEL, rendered)
 
 
 def log_received(logger: logging.Logger, message: pb.ServerMessage) -> None:
     """Log one line for a message we received: RECEIVED_LABEL, then the
     message in one-line protobuf text form."""
-    raise NotImplementedError("package I")
+    rendered = text_format.MessageToString(message, as_utf8=True, as_one_line=True)
+    logger.info("%s %s", RECEIVED_LABEL, rendered)
