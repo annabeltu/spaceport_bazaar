@@ -87,15 +87,32 @@ protoc --python_out=generated --proto_path=starter starter/bazaar.proto
 ```
 
 Paste your client token at the hidden prompt (or set `SPACEPORT_CLIENT_TOKEN`).
-This connects to `wss://spaceport.edneo.com/ws` and displays incoming state.
-By default it only listens. To declare readiness and keep listening, run:
+This connects to `wss://spaceport.edneo.com/ws`, confirms readiness, and trades
+automatically while the run is running. It reads your assigned specialty and
+inventory from every snapshot, including after reconnecting; no resource choice
+is needed. To observe without trading, run:
 
 ```sh
-.venv/bin/python client/live.py --ready
+.venv/bin/python client/live.py --observe
 ```
 
 Wait for `Readiness confirmed`. The instructor controls when the run starts.
-The client does not send trading commands. Press Ctrl+C to disconnect.
+The trader accepts affordable offers for needed imports, advertises its specialty,
+and proposes equal-quantity trades from the first running tick, seeking enough
+imported supplies for the remaining run rather than waiting for stocks to run low. It keeps two ticks of upkeep
+and budgets outstanding offers. Other planets must accept offers, so survival is
+not guaranteed. Press Ctrl+C to disconnect; rerun the command to reconnect.
+A planet that has already reached zero health cannot recover in the same run;
+the instructor must start a new run. Use `--observe --ready` to declare readiness
+without trading.
 Use `--once` to verify authentication and read one state, or `--url` for another server.
 The observer dashboard is at <https://spaceport.edneo.com/>; use your separate
 observer token there.
+
+The trader estimates other planets' specialties from distinct advertisements.
+The earliest observed advertisement gets extra weight; repeated publications
+can revise the estimate. Mixed or tied signals remain unknown. Current compatible
+ads take priority, followed by current sellers and inferred producers. History
+is retained during the connection and reset for a new run; reconnecting rebuilds
+estimates from advertisements present in the server snapshot. It pays with its
+own surplus specialty and prioritizes imports with the fewest ticks of upkeep left.
