@@ -79,3 +79,23 @@ mkdir -p generated
 touch generated/__init__.py
 protoc --python_out=generated --proto_path=starter starter/bazaar.proto
 ```
+
+## Connect to the remote server
+
+```sh
+.venv/bin/python client/live.py
+```
+
+Paste your client token at the hidden prompt (or set `SPACEPORT_CLIENT_TOKEN`).
+This connects to `wss://spaceport.edneo.com/ws` and displays incoming state.
+By default it only listens. To declare readiness and keep listening, run:
+
+```sh
+.venv/bin/python client/live.py --ready
+```
+
+Wait for `Readiness confirmed`. The instructor controls when the run starts.
+The client does not send trading commands. Press Ctrl+C to disconnect.
+Use `--once` to verify authentication and read one state, or `--url` for another server.
+The observer dashboard is at <https://spaceport.edneo.com/>; use your separate
+observer token there.
