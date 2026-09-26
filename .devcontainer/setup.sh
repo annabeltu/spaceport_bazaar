@@ -10,4 +10,4 @@ protoc --python_out=generated --proto_path=starter starter/bazaar.proto
 
 echo "Setup complete. Open two terminals and run:"
 echo "  bash scripts/start-server.sh"
-echo "  .venv/bin/python client/connect.py"
+echo "  .venv/bin/python client/practice.py"

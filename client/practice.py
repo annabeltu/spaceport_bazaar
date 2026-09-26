@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Connect to the practice server and complete practice steps 1 through 10."""
+"""Connect to the local practice server and complete practice steps 1 through 10."""
 
 # Step numbers in this file refer to starter/README.md, "Complete the exchange".
 

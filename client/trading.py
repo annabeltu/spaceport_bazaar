@@ -28,14 +28,15 @@ class Trader:
     reserve their inventory. Other players still have to agree to proposed trades.
     """
 
-    def __init__(self):
+    def __init__(self, cooperate=False):
+        self.cooperate = cooperate
         self.last_tick = None
         self.observation_run = None
         self.advertisement_history = {}
         self.inferred_specialties = {}
 
     def observe(self, state):
-        """Count distinct publications, not repeated snapshots of the same ad."""
+        """Infer specialty from the earliest observed advertisement in this run."""
         if self.observation_run != state.run_id:
             self.observation_run = state.run_id
             self.advertisement_history.clear()
@@ -50,14 +51,9 @@ class Trader:
             histories.setdefault(peer, []).append((tick, version, selling))
         for peer, ads in histories.items():
             ads.sort()
-            scores = {resource: 0.0 for resource in (1, 2, 3)}
-            for index, (_, _, selling) in enumerate(ads):
-                if selling:
-                    for resource in set(selling):
-                        scores[resource] += (2 if index == 0 else 1) / len(set(selling))
-            best = max(scores.values())
-            winners = [r for r, score in scores.items() if score == best]
-            self.inferred_specialties[peer] = winners[0] if best and len(winners) == 1 else None
+            selling = set(ads[0][2])
+            self.inferred_specialties[peer] = (
+                next(iter(selling)) if len(selling) == 1 else None)
 
     def plan(self, state):
         self.observe(state)
@@ -136,15 +132,20 @@ class Trader:
                                   if a.status == pb.PUBLICATION_STATUS_ACTIVE
                                   and a.expires_tick > state.tick
                                   and resource + 1 in a.selling.items}
+            seekers = {a.station_id for a in state.advertisements.items
+                       if a.status == pb.PUBLICATION_STATUS_ACTIVE and a.expires_tick > state.tick
+                       and station.specialty in a.seeking.items}
             def rank(peer):
                 inferred = self.inferred_specialties.get(peer)
                 if peer in sellers:
                     return 0
-                if peer in advertised_sellers:
+                if inferred == resource + 1 and peer in seekers:
                     return 1
-                if inferred == resource + 1:
+                if peer in advertised_sellers:
                     return 2
-                return 3 if inferred is None else 4
+                if inferred == resource + 1:
+                    return 3
+                return 4 if inferred is None else 5
             candidates = sorted(peers, key=rank)
             # With private specialties and no ads, rotate small probes among peers.
             for peer in candidates:
@@ -165,4 +166,25 @@ class Trader:
                     available[specialty] -= amount
                     slots -= 1
                 break
+        # A single account cannot see peer health. Treat an active request as
+        # evidence of need, and offer a small gift only from a safe buffer.
+        if (self.cooperate and available[specialty] >= 6 * upkeep[specialty] + 1
+                and all(inventory[i] >= 6 * upkeep[i] for i in range(3))
+                and slots > 0 and ttl):
+            aid_peers = {a.station_id for a in state.advertisements.items
+                         if a.station_id != state.self_station_id
+                         and a.status == pb.PUBLICATION_STATUS_ACTIVE
+                         and a.expires_tick > state.tick
+                         and station.specialty in a.seeking.items}
+            peer = next((p for p in peers if p in aid_peers
+                         and not any(o.recipient_id == p for o in outgoing)), None)
+            if peer:
+                message, command = _build('offer', pb.OFFER_COMMAND_TYPE_OFFER,
+                                          state.run_id, request_id())
+                command.body.recipient_id = peer
+                command.body.give.CopyFrom(pb.Bundle(**{
+                    r: 1 if i == specialty else 0 for i, r in enumerate(RESOURCES)}))
+                command.body.receive.CopyFrom(pb.Bundle(water=0, food=0, components=0))
+                command.body.expires_tick = state.tick + ttl
+                add(message)
         return commands

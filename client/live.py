@@ -13,10 +13,10 @@ from client.connection import receive, send
 from client.messages import build_ready
 from client.trading import Trader, describe
 
-async def watch(url, token, once, ready=False, trade=True):
+async def watch(url, token, once, ready=False, trade=True, cooperate=False):
     trade = trade and not once
     ready = ready or trade
-    trader = Trader()
+    trader = Trader(cooperate=cooperate)
     protocol = "bazaar.protobuf.v2"
     async with connect(url, additional_headers={"Authorization": f"Bearer {token}"},
                        subprotocols=[protocol], open_timeout=20) as websocket:
@@ -25,6 +25,7 @@ async def watch(url, token, once, ready=False, trade=True):
         print("Connected and authenticated.", flush=True)
         initial = await asyncio.wait_for(receive(websocket, "state"), timeout=30)
         state = initial.state
+        trader.observe(state)
         print(describe(state), flush=True)
         if ready:
             await send(websocket, build_ready(state.run_id, state.snapshot_sequence))
@@ -36,6 +37,7 @@ async def watch(url, token, once, ready=False, trade=True):
                         raise RuntimeError("Server rejected the readiness declaration.")
                     if kind == "state":
                         initial = message
+                        trader.observe(message.state)
                     if kind == "readiness":
                         confirmation = message.readiness
                         if (not confirmation.ready or confirmation.run_id != state.run_id
@@ -66,6 +68,7 @@ def main():
     parser.add_argument("--once", action="store_true", help="Read initial state, then disconnect")
     parser.add_argument("--ready", action="store_true", help="Declare readiness and wait for confirmation")
     parser.add_argument("--observe", action="store_true", help="Only display state; disable automatic trading")
+    parser.add_argument("--cooperate", action="store_true", help="Offer small surplus gifts to peers advertising need")
     args = parser.parse_args()
     if args.ready and args.once:
         parser.error("--ready cannot be combined with --once; stay connected while ready")
@@ -73,7 +76,7 @@ def main():
     if not token.strip():
         parser.error("A client token is required")
     try:
-        asyncio.run(watch(args.url, token.strip(), args.once, args.ready, trade=not args.observe))
+        asyncio.run(watch(args.url, token.strip(), args.once, args.ready, trade=not args.observe, cooperate=args.cooperate))
     except KeyboardInterrupt:
         pass
 

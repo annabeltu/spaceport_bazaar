@@ -210,7 +210,7 @@ def test_infers_first_ad_and_does_not_count_snapshots_as_new_evidence(state):
     for i in range(3):
         advertisement(state, f'later-{i}', 'P01', [pb.RESOURCE_FOOD], i + 1)
     trader.observe(state)
-    assert trader.inferred_specialties['P01'] == pb.RESOURCE_FOOD
+    assert trader.inferred_specialties['P01'] == pb.RESOURCE_WATER
 
 
 def test_ambiguous_selling_does_not_invent_specialty(state):
@@ -247,3 +247,47 @@ def test_live_compatible_ad_overrides_historical_guess(state):
     ad.seeking.items.append(pb.RESOURCE_COMPONENTS)
     offers = [c.offer for c in trader.plan(state) if c.WhichOneof('message') == 'offer']
     assert next(o for o in offers if o.body.receive.water).body.recipient_id == 'P02'
+
+
+def test_cooperation_gives_small_surplus_gift_to_advertised_need(state):
+    station = getattr(state, 'self')
+    station.inventory.CopyFrom(pb.Bundle(water=30, food=30, components=60))
+    ad = advertisement(state, 'help', 'P01', [pb.RESOURCE_WATER], state.tick)
+    ad.seeking.items.append(pb.RESOURCE_COMPONENTS)
+    commands = Trader(cooperate=True).plan(state)
+    gifts = [c.offer for c in commands if c.WhichOneof('message') == 'offer'
+             and sum(getattr(c.offer.body.receive, r) for r in RESOURCES) == 0]
+    assert len(gifts) == 1
+    assert gifts[0].body.recipient_id == 'P01'
+    assert gifts[0].body.give.components == 1
+    gifts[0].SerializeToString()
+
+
+def test_cooperation_does_not_give_away_resources_while_in_danger(state):
+    ad = advertisement(state, 'help', 'P01', [pb.RESOURCE_WATER], state.tick)
+    ad.seeking.items.append(pb.RESOURCE_COMPONENTS)
+    commands = Trader(cooperate=True).plan(state)
+    assert all(sum(getattr(c.offer.body.receive, r) for r in RESOURCES) > 0
+               for c in commands if c.WhichOneof('message') == 'offer')
+
+
+def test_inferred_producer_seeking_our_resource_is_preferred(state):
+    trader = Trader()
+    advertisement(state, 'p1-first', 'P01', [pb.RESOURCE_WATER])
+    advertisement(state, 'p2-first', 'P02', [pb.RESOURCE_WATER])
+    trader.observe(state)
+    state.advertisements.ClearField('items')
+    ad = advertisement(state, 'p1-request', 'P01', [], state.tick)
+    ad.seeking.items.append(pb.RESOURCE_COMPONENTS)
+    offers = [c.offer for c in trader.plan(state) if c.WhichOneof('message') == 'offer']
+    assert next(o for o in offers if o.body.receive.water).body.recipient_id == 'P01'
+
+
+def test_earliest_ad_uses_creation_order_and_keeps_ambiguous_first(state):
+    trader = Trader()
+    advertisement(state, 'later', 'P01', [pb.RESOURCE_FOOD], 2)
+    advertisement(state, 'first', 'P01', [pb.RESOURCE_WATER], 0)
+    advertisement(state, 'mixed-first', 'P02', [pb.RESOURCE_WATER, pb.RESOURCE_FOOD], 0)
+    advertisement(state, 'clear-later', 'P02', [pb.RESOURCE_FOOD], 2)
+    trader.observe(state)
+    assert trader.inferred_specialties == {'P01': pb.RESOURCE_WATER, 'P02': None}

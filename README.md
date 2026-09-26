@@ -1,78 +1,217 @@
 # Spaceport Bazaar client
 
-This repository contains a Python devcontainer for the practice server in
-[`starter/README.md`](starter/README.md).
+A Python client for trading water, food, and components in Spaceport Bazaar. The main workflow uses **your own client token and one connection to your station**. It learns likely resource producers from public advertisements and proposes trades to help stations stay supplied.
 
-## Start in VS Code
+The repository also includes a scripted local practice exercise, automated tests, and an optional coordinator that requires nine separate authorized accounts. You do not need the coordinator for single-station play.
 
-1. Make sure Docker Desktop is running.
-2. Open this repository in VS Code.
-3. Run **Dev Containers: Reopen in Container** from the command palette.
-4. Wait for the post-create setup to finish.
+## 1. Set up the workspace
 
-Then open two terminals inside the container.
+1. Install Docker Desktop, VS Code, and the VS Code Dev Containers extension.
+2. Start Docker Desktop and open this repository in VS Code.
+3. Open the command palette and select **Dev Containers: Reopen in Container**.
+4. Wait for the container's setup to finish.
 
-Terminal 1 starts the matching ARM64 or x86-64 Linux server binary:
+**Run all commands below from the repository root in a terminal inside the container.** The commands use `.venv/bin/python` explicitly, so activating the virtual environment is unnecessary.
+
+The container supplies Python 3.12, the Protobuf compiler, and the Linux libraries needed by the practice server. It automatically runs:
+
+```sh
+bash .devcontainer/setup.sh
+```
+
+Purpose: create `.venv`, install runtime dependencies, and generate Python message classes from `starter/bazaar.proto`. Run this manually if you need to repeat setup. It does not start a server or install pytest.
+
+Install the development dependencies before running tests:
+
+```sh
+.venv/bin/python -m pip install -r requirements-dev.txt
+```
+
+Purpose: install pytest and the runtime dependencies listed in `requirements.txt`.
+
+## 2. Run your station on the live server
+
+For automatic trading with optional help for other planets:
+
+```sh
+.venv/bin/python client/live.py --cooperate
+```
+
+Purpose: connect to `wss://spaceport.edneo.com/ws`, authenticate as your station, declare readiness, and trade while the run is running. Cooperation also allows small surplus gifts to planets advertising a need. Enter your **client token** at the hidden prompt. The instructor controls when the run starts; look for `Readiness confirmed`.
+
+Choose one of these commands for other modes; they are alternatives, not steps to run together:
+
+| Command | Purpose |
+| --- | --- |
+| `.venv/bin/python client/live.py` | Automatically trade for your station without proposing cooperative gifts. |
+| `.venv/bin/python client/live.py --observe` | Display server messages and state without declaring readiness or trading. |
+| `.venv/bin/python client/live.py --observe --ready` | Declare readiness and keep listening, with automatic trading disabled. |
+| `.venv/bin/python client/live.py --once` | Authenticate, read the initial state, and disconnect without trading. |
+| `.venv/bin/python client/live.py --help` | Show the available command-line options. |
+
+Do not combine `--once` with `--ready`. To use a different server, supply its WebSocket address:
+
+```sh
+.venv/bin/python client/live.py --url wss://YOUR-SERVER/ws --cooperate
+```
+
+Purpose: run the same strategy against the server you specify. Replace `YOUR-SERVER` with the real host.
+
+The client also accepts the `SPACEPORT_CLIENT_TOKEN` environment variable. In Bash, you can set it without putting the token into a command in shell history:
+
+```sh
+read -r -s -p 'Client token: ' SPACEPORT_CLIENT_TOKEN
+printf '\n'
+export SPACEPORT_CLIENT_TOKEN
+.venv/bin/python client/live.py --cooperate
+unset SPACEPORT_CLIENT_TOKEN
+```
+
+Purpose: reuse an environment-provided token for the launch, then remove it from the shell after the client exits. The built-in hidden prompt is sufficient for normal use.
+
+Press **Ctrl+C** to stop a client. Rerun its command to reconnect; it does not automatically reconnect. Connecting again as the same station replaces its previous session. A planet that has permanently failed needs a new run to recover.
+
+The observer dashboard is at <https://spaceport.edneo.com/> and uses your separate **observer token**.
+
+## 3. Understand the trading strategy
+
+The client chooses trades; the server validates commands and settles an offer when its recipient accepts it. An advertisement is a public statement of interest, not a completed trade.
+
+| Message | Meaning |
+| --- | --- |
+| Advertisement | “I sell water and seek food.” No inventory changes. |
+| Offer | “P02, I offer three water for three food.” The recipient must accept. |
+| Accept | Agree to a specific offer so the server can attempt settlement. |
+| Withdraw | Cancel an advertisement or an open outgoing offer. |
+| Ready | Confirm readiness using the received snapshot sequence. |
+| Sync | Request a fresh authoritative state snapshot. |
+
+`Trader` in `client/trading.py` follows this strategy:
+
+1. Read your actual specialty, inventory, and upkeep from the server snapshot.
+2. Remember each peer's earliest observed advertisement, including observations before readiness is confirmed. If it sells exactly one resource, infer that resource as the peer's primary resource. Empty or mixed first listings remain unknown; later listings do not replace the inference.
+3. Seek imported resources for the remaining run, prioritizing those with the fewest ticks of supply left. Preserve two ticks of your own upkeep and account for resources already promised in open offers.
+4. Accept useful, affordable incoming trades and advertise your own surplus specialty and resource needs.
+5. Propose small equal-quantity trades, up to three units per offer. Prefer current mutually compatible advertisements, then inferred producers requesting your resource, current sellers, and other inferred producers. Unknown partners can receive small exploratory offers when better matches are unavailable.
+6. Respect the server's command, request-record, message-size, expiration, and open-offer limits. Plan at most one batch per tick.
+
+With `--cooperate`, the trader may also offer one unit of its specialty for free to a peer actively requesting it. Gifts require a buffer of your own supplies and spare specialty inventory after budgeting offers. The recipient must still accept.
+
+For example, a water producer can remember a peer's first food advertisement and later offer water for food, prioritizing that peer when it requests water.
+
+This uses public information through your one connection. Advertisements do not prove a peer's specialty, inventory, or health. The goal is longer survival across planets, but the client cannot guarantee it or accept trades for anyone else. Advertisement memory is held in the current process and cleared for a new run. Restarting rebuilds it from available advertisements, so joining late can miss the original listing.
+
+## 4. Run the local practice exercise
+
+The local exercise checks protocol behavior using scripted stations P01 and P02. It is separate from the live survival simulation and does not require your live token.
+
+In **terminal 1**, start the practice server:
 
 ```sh
 bash scripts/start-server.sh
 ```
 
-Terminal 2 connects as P01 and completes practice steps 1 through 10:
+Purpose: select the ARM64 or x86-64 Linux binary for the container and start the Protobuf server at `ws://127.0.0.1:3001/ws`. The server creates local validation credentials and a report under `starter/`.
+
+Leave terminal 1 running. In **terminal 2**, run:
 
 ```sh
-.venv/bin/python client/connect.py
+.venv/bin/python client/practice.py
 ```
 
-The server must remain running because restarting it creates a new run and new
-credentials. Both commands must run inside the same devcontainer so the local
-WebSocket URL `ws://127.0.0.1:3001/ws` reaches the server.
+Purpose: authenticate as P01 using `starter/validation-credentials.json` and complete the ten steps described in [the practice instructions](starter/README.md). The client:
 
-The client validates the initial state, confirms readiness, publishes and replaces
-an advertisement, then offers P02 two water for one food. It checks each command's
-result and state before continuing, then validates P02's automatic acceptance
-and gift, including inventory and transaction checks. It prints the gift's
-`ZERO_PRICE_OFFER_ID`, then accepts the gift and validates the result and state.
-After confirming two transactions, inventory `(28,31,31)`, and the still-active
-components advertisement, it withdraws the advertisement and checks that inventory and both transactions
-remain unchanged. It then sends `student-advertise-2` and checks the intentional
-request-capacity protocol error. No result or state is expected for that request.
-On the same connection, it sends sync and validates the final state, including
-five stored results, trade totals, and zero simulation counters, then exits.
-A fresh uninterrupted run sends 8 messages and receives 16; reconnects change
-these counts and restart snapshot sequences. The server report in
-`starter/validation-report.json` should show `sample exchange completed`,
-`last_completed_step: 10`, and final inventory `(28,31,31)`.
+1. Reads the initial state and confirms readiness.
+2. Advertises water for food, then replaces that listing with a components request.
+3. Offers P02 two water for one food and checks P02's automatic acceptance.
+4. Accepts P02's free component and verifies both transactions.
+5. Withdraws its advertisement.
+6. Intentionally exceeds request capacity and checks the expected error.
+7. Requests the final state and validates inventory, stored results, and trade totals.
 
-You can reconnect through step 8 without restarting the server: the client
-validates the current state and recovers existing offer IDs before continuing.
-Snapshot sequences are checked relative to the connection's latest snapshot.
-At world version 8 the client proceeds directly to withdrawal. At version 9 it
-checks the matching local validation report: after step 8 it sends the capacity
-request; after step 9 it proceeds directly to sync. The rejected request is not
-stored in state, and world version 9 alone cannot distinguish these stages.
-A run marked `scenario mismatch` must be restarted.
-
-Message construction lives in `client/messages.py`, binary transport in
-`client/connection.py`, and snapshot/result checks in `client/state.py`.
-`client/connect.py` coordinates the exercise and retains the latest state and
-advertisement/offer IDs.
-
-## Run automated tests
+Inspect the practice server's completion report:
 
 ```sh
-.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m json.tool starter/validation-report.json
+```
+
+Purpose: pretty-print the report. Successful completion reports `sample exchange completed`, `last_completed_step: 10`, and final inventory of 28 water, 31 food, and 31 components. The exercise has no simulation ticks. The intentional request-capacity error is part of a successful exercise.
+
+Keep the server running when reconnecting: restarting it creates a new run and credentials. Rerunning `practice.py` can resume supported progress without replaying completed commands. At world version 9 it consults the matching report to determine whether the intentional capacity error has already occurred. If the report says `scenario mismatch`, stop the practice server with Ctrl+C, start it again, and rerun the practice client.
+
+## 5. What each client file does
+
+| File | Responsibility and main functions |
+| --- | --- |
+| [`client/live.py`](client/live.py) | Entry point for your single live station. `main()` parses options and reads the token. `watch()` connects, confirms readiness, observes snapshots, asks `Trader.plan()` for commands, and sends them. |
+| [`client/trading.py`](client/trading.py) | Single-station decision logic. `Trader.observe()` remembers advertisements and infers specialties. `Trader.plan()` selects acceptances, advertisements, trades, and optional gifts. `describe()` formats station status; `quantities()` reads resource bundles. It constructs commands without opening a connection. |
+| [`client/messages.py`](client/messages.py) | Builds outgoing Protobuf command objects. `_build()` fills common protocol fields. Helpers build readiness, advertisements, offers, acceptance, withdrawal, and sync messages. `build_offer()` is specifically the practice two-water-for-one-food offer to P02; the live trader builds its own variable offers using `_build()`. |
+| [`client/connection.py`](client/connection.py) | Shared transport helpers. `decode()` parses and validates binary server messages; `receive()` reads, prints, and optionally checks a message type; `send()` serializes and transmits a command over an existing WebSocket. |
+| [`client/practice.py`](client/practice.py) | Entry point for the local ten-step exercise, formerly named `connect.py`. Loads P01's local credentials, runs the scripted exchange, tracks its latest snapshot and object IDs, and resumes supported practice progress. |
+| [`client/state.py`](client/state.py) | Practice-specific validation. `require()` raises an error on an unexpected condition; `bundle()` reads resource quantities. The `validate_*()` functions check snapshots, trades, gifts, withdrawals, errors, and final totals. `recover_offer_id()` finds the existing practice offer after reconnecting. This file is not the live client's state store and is not used by `live.py`. |
+| [`client/hive.py`](client/hive.py) | Optional, separate program for controlling nine authorized stations. `load_tokens()` loads credentials; `Session` tracks each connection and waits for results and snapshots; `choose_transfer()` identifies resource transfers; `coordinate()` arranges gifts and acceptance across accounts. It is not launched by `live.py` and is not used with your single token. |
+| `client/__pycache__/` | Python-generated compiled cache files, if present. These are not source files and do not need manual editing. |
+
+The live flow is:
+
+```text
+Server snapshot → connection.py → live.py → trading.py
+                                               ↓
+Server ← connection.py ← live.py ← commands built with messages.py
+```
+
+`live.py` also builds its readiness message directly through `messages.py`. The practice flow uses `practice.py` to coordinate transport and messages, with `state.py` checking the results. All clients use the generated Protobuf definitions in `generated/bazaar_pb2.py`.
+
+## 6. Run and understand the tests
+
+After installing development dependencies, run all tests:
+
+```sh
 .venv/bin/python -m pytest -q
 ```
 
-The tests cover command serialization, required empty resource containers and
-zero quantities, response decoding, initial-state checks, and selected command
-validation failures. They run without contacting the practice server.
+Purpose: check protocol helpers, practice behavior, live trading decisions, and coordinator logic. These tests run locally without a running practice server or live credentials. They use constructed snapshots, simulated exchanges, and mocked connections.
 
-## Regenerate Python Protobuf bindings
+Run an individual test file when working on a specific area:
 
-The post-create step generates `generated/bazaar_pb2.py`. If the schema changes,
-regenerate it with:
+| Command | What the test file checks |
+| --- | --- |
+| `.venv/bin/python -m pytest -q tests/test_client.py` | Command serialization, required empty fields and zero quantities, binary decoding, practice snapshot validation, trade and gift settlement, withdrawals, capacity errors, final totals, and resuming the practice exercise without replaying commands. |
+| `.venv/bin/python -m pytest -q tests/test_trading.py` | Specialty-based decisions, useful versus harmful incoming offers, upkeep reserves, command budgets, pending offers, advertisement inference and partner selection, cooperation limits, and using the latest snapshot after live readiness. |
+| `.venv/bin/python -m pytest -q tests/test_hive.py` | Nine-account credential validation, donor reserves, urgent-recipient selection, command budgets, waiting for authoritative settlement state, and a simplified 120-tick resource-sharing simulation. This simulation is not proof of survival on the live server. |
+
+For more detail on each test result:
+
+```sh
+.venv/bin/python -m pytest -v
+```
+
+To run only advertisement-inference tests while changing that strategy:
+
+```sh
+.venv/bin/python -m pytest -q tests/test_trading.py -k 'first_ad or earliest_ad or ambiguous'
+```
+
+Purpose: filter tests by name. Test files verify behavior; they are not programs for joining the game.
+
+## 7. Supporting files and Protobuf generation
+
+| File or directory | Purpose |
+| --- | --- |
+| `requirements.txt` | Runtime dependencies: `protobuf` for message encoding and `websockets` for connections. |
+| `requirements-dev.txt` | Includes runtime dependencies and adds pytest. |
+| `.devcontainer/devcontainer.json` | VS Code container configuration, automatic setup, Python interpreter, extensions, and port forwarding. |
+| `.devcontainer/Dockerfile` | Python 3.12 Linux image and system dependencies, including `protoc`. |
+| `.devcontainer/setup.sh` | Creates the virtual environment, installs runtime packages, and generates Protobuf bindings. |
+| `scripts/start-server.sh` | Selects and starts the local practice server binary for the container architecture. |
+| `starter/README.md` | Detailed practice exercise and protocol instructions. |
+| `starter/bazaar.proto` | Schema defining messages, state, resource bundles, commands, and enums. |
+| `generated/bazaar_pb2.py` | Generated Python classes used by clients and tests. Regenerate from the schema instead of editing manually. |
+| `generated/__init__.py` | Marks the generated directory as a Python package. |
+| `starter/validation-credentials.json` | Local practice credentials created by the practice server. |
+| `starter/validation-report.json` | Practice server's progress and completion report. |
+
+If the Protobuf schema changes, regenerate the Python classes inside the container:
 
 ```sh
 mkdir -p generated
@@ -80,39 +219,24 @@ touch generated/__init__.py
 protoc --python_out=generated --proto_path=starter starter/bazaar.proto
 ```
 
-## Connect to the remote server
+Purpose: ensure the generated package exists and compile `bazaar.proto` into `generated/bazaar_pb2.py`. Then run the test suite.
+
+## 8. Optional nine-station coordinator
+
+**Skip this for the normal single-token workflow.** `hive.py` requires nine distinct authorized client tokens and opens a connection for each station. It cannot operate with only your token. The scripted local practice server does not support this scenario.
+
+For someone who already has control of all nine accounts, create a private `hive-tokens.json` mapping each station ID (`P01` through `P09`) to its own token. Stop any individual clients for those stations, then run:
 
 ```sh
-.venv/bin/python client/live.py
+.venv/bin/python client/hive.py --tokens-file hive-tokens.json
 ```
 
-Paste your client token at the hidden prompt (or set `SPACEPORT_CLIENT_TOKEN`).
-This connects to `wss://spaceport.edneo.com/ws`, confirms readiness, and trades
-automatically while the run is running. It reads your assigned specialty and
-inventory from every snapshot, including after reconnecting; no resource choice
-is needed. To observe without trading, run:
+Purpose: coordinate resource sharing using all nine stations' private snapshots. The coordinator cancels existing outgoing offers, prioritizes the shortest supply runway, uses lower health to break ties, and transfers actual surplus through gifts that it accepts on the recipient's connection. It targets up to 30 ticks of imported supplies and retains two ticks of a producer's specialty upkeep. It refreshes snapshots after settlement and respects command limits.
+
+The token file is ignored by Git. The coordinator stops on connection failures; rerunning reconstructs state from the server. Its allocation is a heuristic, not a survival guarantee.
+
+Show coordinator options with:
 
 ```sh
-.venv/bin/python client/live.py --observe
+.venv/bin/python client/hive.py --help
 ```
-
-Wait for `Readiness confirmed`. The instructor controls when the run starts.
-The trader accepts affordable offers for needed imports, advertises its specialty,
-and proposes equal-quantity trades from the first running tick, seeking enough
-imported supplies for the remaining run rather than waiting for stocks to run low. It keeps two ticks of upkeep
-and budgets outstanding offers. Other planets must accept offers, so survival is
-not guaranteed. Press Ctrl+C to disconnect; rerun the command to reconnect.
-A planet that has already reached zero health cannot recover in the same run;
-the instructor must start a new run. Use `--observe --ready` to declare readiness
-without trading.
-Use `--once` to verify authentication and read one state, or `--url` for another server.
-The observer dashboard is at <https://spaceport.edneo.com/>; use your separate
-observer token there.
-
-The trader estimates other planets' specialties from distinct advertisements.
-The earliest observed advertisement gets extra weight; repeated publications
-can revise the estimate. Mixed or tied signals remain unknown. Current compatible
-ads take priority, followed by current sellers and inferred producers. History
-is retained during the connection and reset for a new run; reconnecting rebuilds
-estimates from advertisements present in the server snapshot. It pays with its
-own surplus specialty and prioritizes imports with the fewest ticks of upkeep left.
