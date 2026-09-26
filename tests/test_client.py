@@ -326,7 +326,7 @@ def test_reconnect_resumes_without_replaying_commands(
     import asyncio
     from copy import deepcopy
     from types import SimpleNamespace
-    import client.connect as client
+    import client.practice as client
 
     # Build snapshots of each stage from the completed exercise.
     completed = settled_gift
@@ -547,7 +547,7 @@ def test_final_state(settled_gift, change):
 @pytest.mark.parametrize('step,observed', [(8, False), (9, True), (10, True)])
 def test_capacity_progress_from_report(tmp_path, monkeypatch, step, observed):
     import json
-    import client.connect as client
+    import client.practice as client
     (tmp_path / 'starter').mkdir()
     (tmp_path / 'starter' / 'validation-report.json').write_text(json.dumps({
         'run_id': 'run', 'status': 'in progress', 'last_completed_step': step}))
@@ -557,7 +557,7 @@ def test_capacity_progress_from_report(tmp_path, monkeypatch, step, observed):
 
 def test_mismatched_scenario_requires_restart(tmp_path, monkeypatch):
     import json
-    import client.connect as client
+    import client.practice as client
     (tmp_path / 'starter').mkdir()
     (tmp_path / 'starter' / 'validation-report.json').write_text(json.dumps({
         'run_id': 'run', 'status': 'scenario mismatch', 'last_completed_step': 9}))
