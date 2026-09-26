@@ -68,7 +68,7 @@ def main():
     parser.add_argument("--once", action="store_true", help="Read initial state, then disconnect")
     parser.add_argument("--ready", action="store_true", help="Declare readiness and wait for confirmation")
     parser.add_argument("--observe", action="store_true", help="Only display state; disable automatic trading")
-    parser.add_argument("--cooperate", action="store_true", help="Offer small surplus gifts to peers advertising need")
+    parser.add_argument("--cooperate", action="store_true", help="Share surplus with requesting peers and inferred importers")
     args = parser.parse_args()
     if args.ready and args.once:
         parser.error("--ready cannot be combined with --once; stay connected while ready")

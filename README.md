@@ -37,7 +37,7 @@ For automatic trading with optional help for other planets:
 .venv/bin/python client/live.py --cooperate
 ```
 
-Purpose: connect to `wss://spaceport.edneo.com/ws`, authenticate as your station, declare readiness, and trade while the run is running. Cooperation also allows small surplus gifts to planets advertising a need. Enter your **client token** at the hidden prompt. The instructor controls when the run starts; look for `Readiness confirmed`.
+Purpose: connect to `wss://spaceport.edneo.com/ws`, authenticate as your station, declare readiness, and trade while the run is running. Cooperation also allows small preventive gifts to requesting planets and likely importers inferred from their specialties. Enter your **client token** at the hidden prompt. The instructor controls when the run starts; look for `Readiness confirmed`.
 
 Choose one of these commands for other modes; they are alternatives, not steps to run together:
 
@@ -95,7 +95,9 @@ The client chooses trades; the server validates commands and settles an offer wh
 5. Propose small equal-quantity trades, up to three units per offer. Prefer current mutually compatible advertisements, then inferred producers requesting your resource, current sellers, and other inferred producers. Unknown partners can receive small exploratory offers when better matches are unavailable.
 6. Respect the server's command, request-record, message-size, expiration, and open-offer limits. Plan at most one batch per tick.
 
-With `--cooperate`, the trader may also offer one unit of its specialty for free to a peer actively requesting it. Gifts require a buffer of your own supplies and spare specialty inventory after budgeting offers. The recipient must still accept.
+With `--cooperate`, equally ranked trading partners are ordered by when they last received an offer, giving less recently contacted planets opportunities. The trader may also offer at most one unit of its specialty for free per tick, even when its own import needs are satisfied. Explicit active requests take priority; otherwise a peer inferred to produce a different resource is a candidate for preventive aid. Silence is not treated as proof of adequate supplies, and inferred need is not treated as measured scarcity.
+
+Gift candidates exclude planets with an existing outgoing offer or a new trade proposed in the same batch. Gifts preserve six ticks of your own upkeep (or the remaining run if shorter), accounting for pending promises and planned spending. Existing command and offer limits apply. Among equally eligible aid recipients, the least recently contacted is preferred. The recipient must still accept; an offer is only an opportunity, not confirmed assistance. Contact history is held in memory and reconstructed from available outgoing offer records after restart.
 
 For example, a water producer can remember a peer's first food advertisement and later offer water for food, prioritizing that peer when it requests water.
 

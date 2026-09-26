@@ -251,7 +251,7 @@ def test_live_compatible_ad_overrides_historical_guess(state):
 
 def test_cooperation_gives_small_surplus_gift_to_advertised_need(state):
     station = getattr(state, 'self')
-    station.inventory.CopyFrom(pb.Bundle(water=30, food=30, components=60))
+    station.inventory.CopyFrom(pb.Bundle(water=100, food=100, components=60))
     ad = advertisement(state, 'help', 'P01', [pb.RESOURCE_WATER], state.tick)
     ad.seeking.items.append(pb.RESOURCE_COMPONENTS)
     commands = Trader(cooperate=True).plan(state)
@@ -291,3 +291,86 @@ def test_earliest_ad_uses_creation_order_and_keeps_ambiguous_first(state):
     advertisement(state, 'clear-later', 'P02', [pb.RESOURCE_FOOD], 2)
     trader.observe(state)
     assert trader.inferred_specialties == {'P01': pb.RESOURCE_WATER, 'P02': None}
+
+
+def gifts(commands):
+    return [c.offer.body for c in commands if c.WhichOneof('message') == 'offer'
+            and sum(quantities_for_test(c.offer.body.receive)) == 0]
+
+
+def quantities_for_test(bundle):
+    return [getattr(bundle, r) for r in RESOURCES]
+
+
+def test_preventive_aid_to_silent_inferred_importer(state):
+    trader = Trader(cooperate=True)
+    advertisement(state, 'first', 'P01', [pb.RESOURCE_WATER])
+    trader.observe(state)
+    state.advertisements.ClearField('items')
+    getattr(state, 'self').inventory.CopyFrom(pb.Bundle(water=100, food=100, components=20))
+    aid = gifts(trader.plan(state))
+    assert len(aid) == 1 and aid[0].recipient_id == 'P01'
+    assert aid[0].give.components == 1
+
+
+def test_explicit_need_beats_inferred_need(state):
+    advertisement(state, 'silent', 'P01', [pb.RESOURCE_WATER])
+    ad = advertisement(state, 'request', 'P02', [], state.tick)
+    ad.seeking.items.append(pb.RESOURCE_COMPONENTS)
+    getattr(state, 'self').inventory.CopyFrom(pb.Bundle(water=100, food=100, components=20))
+    assert gifts(Trader(cooperate=True).plan(state))[0].recipient_id == 'P02'
+
+
+def test_preventive_aid_rotates_even_when_ticks_skip(state):
+    trader = Trader(cooperate=True)
+    for peer in ('P01', 'P02'):
+        advertisement(state, peer, peer, [pb.RESOURCE_WATER])
+    getattr(state, 'self').inventory.CopyFrom(pb.Bundle(water=100, food=100, components=20))
+    first = gifts(trader.plan(state))[0].recipient_id
+    state.tick += 2  # Tick modulo alone would select the same peer.
+    second = gifts(trader.plan(state))[0].recipient_id
+    assert first != second
+    state.run_id = 'another-run'
+    state.offers.ClearField('items')
+    trader.observe(state)
+    assert trader.last_offer_tick == {}
+
+
+@pytest.mark.parametrize('mode', ['pending', 'reserve', 'budget', 'disabled', 'unknown'])
+def test_preventive_aid_respects_limits(state, mode):
+    advertisement(state, 'first', 'P01', [pb.RESOURCE_WATER])
+    getattr(state, 'self').inventory.CopyFrom(pb.Bundle(water=100, food=100, components=7))
+    if mode == 'pending':
+        state.offers.items.add(proposer_id='P06', recipient_id='P01',
+            status=pb.OFFER_STATUS_OPEN, expires_tick=25,
+            give=pb.Bundle(water=0, food=0, components=1))
+    elif mode == 'reserve':
+        getattr(state, 'self').inventory.components = 6
+    elif mode == 'budget':
+        state.rules.new_commands_per_station_per_tick = 0
+    elif mode == 'unknown':
+        state.advertisements.ClearField('items')
+    assert not gifts(Trader(cooperate=mode != 'disabled').plan(state))
+
+
+def test_no_gift_duplicates_a_trade_in_same_batch(state):
+    getattr(state, 'self').inventory.CopyFrom(pb.Bundle(water=30, food=100, components=60))
+    ad = advertisement(state, 'request', 'P01', [pb.RESOURCE_WATER], state.tick)
+    ad.seeking.items.append(pb.RESOURCE_COMPONENTS)
+    commands = Trader(cooperate=True).plan(state)
+    assert any(c.WhichOneof('message') == 'offer' for c in commands)
+    assert not gifts(commands)
+
+
+def test_cooperative_trades_rotate_between_equally_compatible_peers(state):
+    trader = Trader(cooperate=True)
+    for peer in ('P01', 'P02'):
+        ad = advertisement(state, peer, peer, [pb.RESOURCE_WATER], state.tick)
+        ad.seeking.items.append(pb.RESOURCE_COMPONENTS)
+    getattr(state, 'self').inventory.food = 100
+    def water_partner(commands):
+        return next(c.offer.body.recipient_id for c in commands
+                    if c.WhichOneof('message') == 'offer' and c.offer.body.receive.water)
+    first = water_partner(trader.plan(state))
+    state.tick += 2
+    assert water_partner(trader.plan(state)) != first

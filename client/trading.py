@@ -34,6 +34,7 @@ class Trader:
         self.observation_run = None
         self.advertisement_history = {}
         self.inferred_specialties = {}
+        self.last_offer_tick = {}
 
     def observe(self, state):
         """Infer specialty from the earliest observed advertisement in this run."""
@@ -41,6 +42,7 @@ class Trader:
             self.observation_run = state.run_id
             self.advertisement_history.clear()
             self.inferred_specialties.clear()
+            self.last_offer_tick.clear()
         for ad in state.advertisements.items:
             if ad.station_id == state.self_station_id or not ad.advertisement_id:
                 continue
@@ -80,6 +82,13 @@ class Trader:
         budget = min(state.rules.new_commands_per_station_per_tick - used,
                      state.rules.max_request_records_per_station - len(state.request_results.items))
         commands = []
+        contacted = {o.recipient_id for o in outgoing}
+        # Rebuild recent opportunities from server-visible offers after reconnect.
+        for offer in state.offers.items:
+            if offer.proposer_id == state.self_station_id:
+                self.last_offer_tick[offer.recipient_id] = max(
+                    self.last_offer_tick.get(offer.recipient_id, -1), offer.created_tick)
+
 
         def add(message):
             if len(commands) >= budget:
@@ -146,7 +155,8 @@ class Trader:
                 if inferred == resource + 1:
                     return 3
                 return 4 if inferred is None else 5
-            candidates = sorted(peers, key=rank)
+            candidates = sorted(peers, key=lambda peer: (
+                rank(peer), self.last_offer_tick.get(peer, -1) if self.cooperate else 0))
             # With private specialties and no ads, rotate small probes among peers.
             for peer in candidates:
                 if slots <= 0 or not ttl or available[specialty] <= 0:
@@ -165,19 +175,29 @@ class Trader:
                 if add(message):
                     available[specialty] -= amount
                     slots -= 1
+                    contacted.add(peer)
+                    self.last_offer_tick[peer] = state.tick
                 break
-        # A single account cannot see peer health. Treat an active request as
-        # evidence of need, and offer a small gift only from a safe buffer.
-        if (self.cooperate and available[specialty] >= 6 * upkeep[specialty] + 1
-                and all(inventory[i] >= 6 * upkeep[i] for i in range(3))
+        # Preventive aid never assumes access to peer health. Explicit requests
+        # outrank likely import needs inferred from a different specialty.
+        # Preserve six ticks (or the remaining run) after all pending promises.
+        reserve_ticks = min(6, remaining_ticks)
+        if (self.cooperate and available[specialty] >= max(0, reserve_ticks - 2) * upkeep[specialty] + 1
+                and all(min(inventory[i], available[i] + 2 * upkeep[i]) >= reserve_ticks * upkeep[i]
+                        for i in range(3))
                 and slots > 0 and ttl):
             aid_peers = {a.station_id for a in state.advertisements.items
                          if a.station_id != state.self_station_id
                          and a.status == pb.PUBLICATION_STATUS_ACTIVE
                          and a.expires_tick > state.tick
                          and station.specialty in a.seeking.items}
-            peer = next((p for p in peers if p in aid_peers
-                         and not any(o.recipient_id == p for o in outgoing)), None)
+            likely_importers = {p for p in peers
+                                if self.inferred_specialties.get(p) in (1, 2, 3)
+                                and self.inferred_specialties[p] != station.specialty}
+            candidates = sorted(peers, key=lambda p: (
+                p not in aid_peers, self.last_offer_tick.get(p, -1)))
+            peer = next((p for p in candidates
+                         if p in aid_peers | likely_importers and p not in contacted), None)
             if peer:
                 message, command = _build('offer', pb.OFFER_COMMAND_TYPE_OFFER,
                                           state.run_id, request_id())
@@ -186,5 +206,6 @@ class Trader:
                     r: 1 if i == specialty else 0 for i, r in enumerate(RESOURCES)}))
                 command.body.receive.CopyFrom(pb.Bundle(water=0, food=0, components=0))
                 command.body.expires_tick = state.tick + ttl
-                add(message)
+                if add(message):
+                    self.last_offer_tick[peer] = state.tick
         return commands
